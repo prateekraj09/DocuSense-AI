@@ -71,54 +71,99 @@ caching and token usage tracking to minimize LLM latency and API costs."
 
 [Trade-off 5]: Why 768 dimensions for pgvector?
 - Answer:
-  We chose Google Gemini's `text-embedding-004` model, which generates 768-dimensional
-  dense vector representations. Dimension size in PostgreSQL must match the embedding model
-  exactly (`VECTOR(768)`). 768 dimensions offers an exceptional sweet spot between retrieval
-  accuracy, memory footprint, and index traversal speed (HNSW).
+  Google Gemini's modern embedding models (`models/gemini-embedding-001`) utilize Matryoshka
+  Representation Learning (MRL), allowing output dimensionality configuration. We set it to
+  768 dimensions, which perfectly matches PostgreSQL's `VECTOR(768)`. 768 dimensions provides
+  an ideal sweet spot: cutting memory and storage requirements by 75% compared to 3072 dimensions,
+  while retaining 99%+ of the semantic retrieval quality and dramatically speeding up index lookups.
+
+[Trade-off 6]: Why sliding window chunking with overlap instead of naive fixed-size cuts?
+- Answer:
+  Naive splitting by character count (e.g. cutting every 500 characters) cuts words, code tokens,
+  and sentences in half (e.g., "funct" on chunk 1 and "ion" on chunk 2). A boundary-aware sliding
+  window searches for natural sentence/paragraph delimiters (`\n\n`, `. `, `? `). Overlap ensures
+  that any fact spanning the boundary between two chunks is present in both chunks, preventing
+  retrieval failure.
+
+[Trade-off 7]: Why PyMuPDF (`fitz`) over pypdf or pdfplumber?
+- Answer:
+  PyMuPDF is built on the high-performance C++ MuPDF engine. In production benchmarks, it is
+  5x to 10x faster than pure-Python libraries like pypdf, handles complex multi-column layouts,
+  and reliably extracts page numbers essential for RAG source citations.
 
 --------------------------------------------------------------------------------
-3. MILESTONE 1 SUMMARY & KEY COMPONENTS BUILT
+3. MILESTONE 1 QUIZ - EASY TO UNDERSTAND MODEL ANSWERS
 --------------------------------------------------------------------------------
-1. Containerization & Services (Docker Compose):
-   - PostgreSQL 16 with `pgvector` extension enabled on boot (`docker/init.sql`).
-   - Redis 7 for caching, rate limiting, and message queue.
-   - Multi-stage Dockerfile for containerized deployment.
-2. Configuration & Security (`core/config.py`, `core/security.py`):
-   - Strict Pydantic v2 Settings reading validated environment variables.
-   - Salted password hashing with `bcrypt` (12 rounds) to prevent rainbow table attacks.
-   - Stateless JWT tokens signed with HMAC-SHA256 containing expiration and user UUID.
-3. Database Models & Schema (`db/models.py`):
-   - `User`: Handles identity and password hashes.
-   - `Document`: Manages document lifecycle and processing statuses (PENDING -> PROCESSING -> COMPLETED/FAILED).
-   - `DocumentChunk`: Stores text chunks, page/file metadata (JSONB), 768-dim embeddings (pgvector), and full-text search vectors (tsvector).
-   - `QueryLog`: Tracks audit logs, prompt/completion tokens, latency, and cache hits.
-4. Protected API Endpoints (`api/v1/endpoints/auth.py`, `api/deps.py`):
-   - `POST /api/v1/auth/register`: Duplicate validation, hashing, 201 Created.
-   - `POST /api/v1/auth/login`: Credential validation, JWT generation.
-   - `GET /api/v1/auth/me`: HTTPBearer token extraction, signature verification, user lookup.
+Q1: Why PostgreSQL 16 + pgvector instead of a separate vector DB like Chroma/Pinecone?
+A1: (1) Data Consistency (No Dual-Write Bug): When a user deletes a document in PostgreSQL,
+    CASCADE DELETE automatically deletes its chunks and embeddings in one transaction. With
+    external vector DBs, you have two databases that can easily get out of sync.
+    (2) Simpler Infrastructure & Lower Cost: Instead of paying for, monitoring, and maintaining
+    two separate databases, everything (relational user accounts, documents, full-text search,
+    and vector embeddings) lives inside one reliable database.
+
+Q2: What does the JWT payload claim `sub` contain, and how is it used for multi-tenancy?
+A2: `sub` stands for "Subject" and contains the user's UUID (e.g. "a3b1...").
+    When a request comes in, our dependency `get_current_user` extracts this UUID from the token.
+    Then, every database query (e.g., `SELECT * FROM documents WHERE user_id = :user_id`)
+    filters strictly by this UUID. Because User A's token contains User A's UUID, User A can
+    never view or search User B's documents.
+
+Q3: Why dimension 768, and what happens if a 1536-dim vector is inserted?
+A3: The dimension of the vector in PostgreSQL must match the embedding model exactly. We
+    configured Gemini embeddings with `output_dimensionality=768`, so the column is `VECTOR(768)`.
+    If you attempt to insert a 1536-dimensional vector into a `VECTOR(768)` column, PostgreSQL
+    will immediately reject the query with an error (`ERROR: different vector dimensions 768 and 1536`),
+    preventing corrupted or un-indexable vector data.
 
 --------------------------------------------------------------------------------
-4. COMMON INTERVIEW QUESTIONS FOR MILESTONE 1
+4. MILESTONE 2 SUMMARY & KEY COMPONENTS BUILT
 --------------------------------------------------------------------------------
-Q1: "How do you ensure multi-tenant data isolation in your RAG application?"
-A1: "We enforce multi-tenancy at two levels: Authentication and Database Querying.
-     First, every API request passes through a dependency (`get_current_user`) that
-     cryptographically verifies the JWT Bearer token and extracts the authenticated
-     user's UUID.
-     Second, all database queries for documents, chunks, and similarity searches explicitly
-     filter by `user_id == current_user.id`. There is no global search query that lacks
-     the `user_id` predicate, guaranteeing that User A can never retrieve User B's embeddings."
+1. Document Parsers (`services/parsers/`):
+   - `PDFParser`: Page-by-page text extraction with PyMuPDF, tracking page numbers for citations.
+   - `CodeAndTextParser`: Line-number aware parser for code (.py, .ts, .js) and markdown (.md).
+   - `parse_document`: Universal dispatcher validating against allowed file extensions.
+2. Chunking Engine (`services/chunker.py`):
+   - Sentence/paragraph-aware sliding window with configurable `chunk_size` and `chunk_overlap`.
+   - Attaches metadata (filename, page_number, start_line, end_line) to every chunk.
+3. Google Gemini Embedding Service (`services/embedding.py`):
+   - Direct integration with `google-genai` SDK using `models/gemini-embedding-001`.
+   - Configures `output_dimensionality=768` for optimal storage & speed.
+   - Batch embedding support (`generate_embeddings_batch`) for high ingestion throughput.
+4. Document Ingestion Service (`services/ingestion.py`):
+   - Synchronous processing pipeline: validates file size -> creates Document in PROCESSING state
+     -> extracts blocks -> chunks -> generates embeddings -> saves DocumentChunks -> marks COMPLETED.
+   - Full rollback and FAILED state update on error.
+5. Multi-Tenant Similarity Search (`services/retrieval.py`):
+   - Computes query vector using Gemini embedding service.
+   - Executes cosine distance search (`DocumentChunk.embedding.cosine_distance(query_embedding)`),
+     strictly scoped to `user_id == current_user.id`.
+   - Generates normalized similarity scores (`1.0 - cosine_distance`).
+6. Document REST Endpoints (`api/v1/endpoints/documents.py`):
+   - `POST /api/v1/documents/upload`: Multipart file upload, processing, returns chunk count.
+   - `GET /api/v1/documents`: Lists authenticated user's documents.
+   - `GET /api/v1/documents/{document_id}`: Owner-verified document detail lookup.
+   - `DELETE /api/v1/documents/{document_id}`: Cascade deletes document and chunks.
+   - `POST /api/v1/documents/search`: Vector search endpoint returning top relevant chunks.
 
-Q2: "What happens if a user submits a weak password or an invalid email?"
-A2: "FastAPI and Pydantic v2 enforce compile-time and runtime validation. The
-     `UserRegisterRequest` schema utilizes `EmailStr` to validate RFC-compliant email
-     formats and enforces strict string constraints (`min_length=8, max_length=128`).
-     If validation fails, FastAPI automatically returns a structured `422 Unprocessable Entity`
-     error with field-level details before the request ever reaches the database."
+--------------------------------------------------------------------------------
+5. COMMON INTERVIEW QUESTIONS FOR MILESTONE 2
+--------------------------------------------------------------------------------
+Q1: "How do you choose between Cosine Distance, Euclidean Distance, and Inner Product for vectors?"
+A1: "Cosine Distance (`<=>` in pgvector) measures the angular difference between vectors,
+     making it invariant to vector magnitude (document length). It is ideal for text embeddings.
+     Euclidean Distance (`<->`) measures straight-line physical distance and is sensitive to length.
+     Inner/Dot Product (`<#>`) is fastest but only equivalent to cosine distance if all vectors
+     are pre-normalized to unit length (L2 norm = 1)."
 
-Q3: "Why did you use bcrypt instead of SHA-256 or MD5 for password storage?"
-A3: "SHA-256 and MD5 are cryptographic hash functions designed to be fast; modern GPUs
-     can calculate billions of SHA-256 hashes per second, making them vulnerable to brute-force
-     and rainbow table attacks. Bcrypt is a key derivation function designed to be deliberately
-     slow and memory-intensive (adaptive cost factor). It automatically handles per-user salt
-     generation, making precomputed rainbow tables completely ineffective."
+Q2: "What is chunk overlap, and why is it essential in RAG?"
+A2: "Chunk overlap means sharing a small window of text (e.g. 100-150 characters) between
+     adjacent chunks. Without overlap, critical semantic relationships that happen to cross
+     the boundary between chunk N and chunk N+1 get severed, leading to retrieval failures
+     when the user's question depends on information spanning both chunks."
+
+Q3: "Why did you implement batch embedding instead of generating embeddings chunk by chunk?"
+A3: "Generating embeddings chunk-by-chunk introduces substantial network latency: 100 chunks
+     at 200ms per HTTP request would take 20 seconds of sequential round-trips, plus it quickly
+     hits API rate limits (RPM - Requests Per Minute). Batching sends up to 30-50 chunks in a
+     single HTTP request, reducing network roundtrips from 100 down to 2 or 3 and slashing ingestion time."
