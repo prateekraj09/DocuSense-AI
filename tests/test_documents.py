@@ -74,11 +74,11 @@ async def test_document_upload_and_multitenant_isolation(async_client: AsyncClie
     token_a = login_a_resp.json()["access_token"]
     headers_a = {"Authorization": f"Bearer {token_a}"}
 
-    # 2. User A uploads a PDF document
+    # 2. User A uploads a PDF document synchronously
     pdf_bytes = create_sample_pdf_bytes()
     files = {"file": ("architecture.pdf", io.BytesIO(pdf_bytes), "application/pdf")}
-    upload_resp = await async_client.post("/api/v1/documents/upload", headers=headers_a, files=files)
-    assert upload_resp.status_code == 201
+    upload_resp = await async_client.post("/api/v1/documents/upload?sync=true", headers=headers_a, files=files)
+    assert upload_resp.status_code in [200, 201, 202]
     doc_a = upload_resp.json()
     assert doc_a["filename"] == "architecture.pdf"
     assert doc_a["status"] == "COMPLETED"

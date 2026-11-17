@@ -1,4 +1,10 @@
 from schemas.auth import TokenPayload, TokenResponse, UserLoginRequest, UserRegisterRequest
+from schemas.chat import (
+    ChatQueryRequest,
+    ChatQueryResponse,
+    CitationModel,
+    RetrievedChunkInfo,
+)
 from schemas.document import (
     DocumentChunkDetail,
     DocumentListResponse,
@@ -21,4 +27,8 @@ __all__ = [
     "SimilaritySearchRequest",
     "SimilaritySearchItem",
     "SimilaritySearchResponse",
+    "ChatQueryRequest",
+    "ChatQueryResponse",
+    "CitationModel",
+    "RetrievedChunkInfo",
 ]

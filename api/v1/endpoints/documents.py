@@ -1,3 +1,4 @@
+import os
 import uuid
 from typing import Annotated, List
 
@@ -14,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_current_user
 from core.database import get_db
-from db.models import Document, DocumentChunk, User
+from db.models import Document, DocumentChunk, DocumentStatus, User
 from schemas.document import (
     DocumentListResponse,
     DocumentResponse,
@@ -32,15 +33,19 @@ router = APIRouter(prefix="/documents", tags=["Documents"])
 @router.post(
     "/upload",
     response_model=DocumentResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Upload and ingest a document",
-    description="Synchronously parses, chunks, generates 768-dim Gemini embeddings, and stores in PostgreSQL.",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Upload and ingest a document asynchronously",
+    description="Validates file, creates PENDING document record, enqueues processing job to Celery/Redis, and returns HTTP 202.",
 )
 async def upload_document(
     file: Annotated[UploadFile, File(...)],
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    sync: bool = False,
 ) -> DocumentResponse:
+    import base64
+    from workers.tasks import ingest_document_task
+
     filename = file.filename or "uploaded_file.txt"
     file_bytes = await file.read()
 
@@ -50,29 +55,76 @@ async def upload_document(
             detail="Uploaded file is empty.",
         )
 
-    try:
-        doc = await process_document_sync(
-            db=db,
-            user_id=current_user.id,
-            filename=filename,
-            content_bytes=file_bytes,
-        )
-    except ValueError as ve:
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(ve),
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Document processing failed: {str(e)}",
+            detail=f"Unsupported file extension '{ext}'. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
         )
 
-    # Count chunks
-    chunk_count_res = await db.execute(
-        select(func.count(DocumentChunk.id)).where(DocumentChunk.document_id == doc.id)
+    if sync:
+        # Synchronous execution mode (for tests or instant CLI workflows)
+        try:
+            doc = await process_document_sync(
+                db=db,
+                user_id=current_user.id,
+                filename=filename,
+                content_bytes=file_bytes,
+            )
+        except ValueError as ve:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Document processing failed: {str(e)}",
+            )
+
+        chunk_count_res = await db.execute(
+            select(func.count(DocumentChunk.id)).where(DocumentChunk.document_id == doc.id)
+        )
+        chunk_count = chunk_count_res.scalar() or 0
+
+        return DocumentResponse(
+            id=doc.id,
+            user_id=doc.user_id,
+            filename=doc.filename,
+            file_type=doc.file_type,
+            status=doc.status,
+            error_message=doc.error_message,
+            created_at=doc.created_at,
+            chunk_count=chunk_count,
+        )
+
+    # Production Asynchronous Ingestion (HTTP 202 Accepted + Celery Worker)
+    doc_id = uuid.uuid4()
+    doc = Document(
+        id=doc_id,
+        user_id=current_user.id,
+        filename=filename,
+        file_type=ext or "text",
+        status=DocumentStatus.PENDING,
+        error_message=None,
     )
-    chunk_count = chunk_count_res.scalar() or 0
+    db.add(doc)
+    await db.commit()
+    await db.refresh(doc)
+
+    content_b64 = base64.b64encode(file_bytes).decode("utf-8")
+
+    try:
+        # Push background task to Celery via Redis broker
+        ingest_document_task.delay(
+            document_id=str(doc.id),
+            user_id=str(current_user.id),
+            filename=filename,
+            content_b64=content_b64,
+        )
+    except Exception as e:
+        # If Celery broker is offline in local dev, mark and warn
+        doc.status = DocumentStatus.FAILED
+        doc.error_message = f"Failed to enqueue task to worker: {str(e)}"
+        await db.commit()
+        await db.refresh(doc)
 
     return DocumentResponse(
         id=doc.id,
@@ -82,7 +134,7 @@ async def upload_document(
         status=doc.status,
         error_message=doc.error_message,
         created_at=doc.created_at,
-        chunk_count=chunk_count,
+        chunk_count=0,
     )
 
 

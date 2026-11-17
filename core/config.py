@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: Optional[str] = None
     EMBEDDING_MODEL: str = "models/gemini-embedding-001"
     EMBEDDING_DIMENSION: int = 768
-    GENERATION_MODEL: str = "gemini-2.5-flash"
+    GENERATION_MODEL: str = "models/gemini-3.5-flash-lite"
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -1,6 +1,7 @@
 from fastapi import APIRouter
-from api.v1.endpoints import auth, documents
+from api.v1.endpoints import auth, chat, documents
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
 api_router.include_router(documents.router)
+api_router.include_router(chat.router)

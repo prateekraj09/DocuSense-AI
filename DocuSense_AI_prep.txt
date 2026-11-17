@@ -4,166 +4,277 @@
 Author: Prateek (Guided by Principal Software Engineer)
 Project: DocuSense AI (Multi-Tenant Production Document & Code Intelligence API)
 Target Role: AI Software Engineer / Backend Systems Engineer (Production RAG)
+Perspective: "Teaching the Interviewer From First Principles"
 ================================================================================
 
---------------------------------------------------------------------------------
-1. PROJECT ELEVATOR PITCH (HOW TO INTRODUCE THIS PROJECT IN AN INTERVIEW)
---------------------------------------------------------------------------------
-"DocuSense AI is a production-grade, multi-tenant SaaS backend for Document and
-Code Intelligence built with FastAPI, PostgreSQL 16 (pgvector), and Google Gemini.
-Unlike tutorial RAG scripts that process documents synchronously in memory and 
-leak data between users, DocuSense AI implements enterprise-grade multi-tenant 
-data isolation via JWT authentication, offloads parsing and embedding generation 
-to asynchronous Celery/Redis background workers, and executes single-store hybrid 
-retrieval combining pgvector cosine distance and PostgreSQL tsvector full-text 
-search via Reciprocal Rank Fusion (RRF). It also incorporates Redis semantic/exact 
-caching and token usage tracking to minimize LLM latency and API costs."
+TABLE OF CONTENTS
+1. EXECUTIVE SUMMARY: WHAT PROBLEM ARE WE SOLVING & HOW?
+2. FIRST-PRINCIPLES CONCEPT DICTIONARY (THEORY, DEFINITIONS & REALITY)
+3. SYSTEM ARCHITECTURE & END-TO-END DATA LIFECYCLE
+4. COMPONENT DEEP DIVES & HOW EVERYTHING WAS IMPLEMENTED
+5. ARCHITECTURAL DESIGN TRADE-OFFS ("WHY THIS OVER THAT?")
+6. MASTER INTERVIEW QUIZ REVISION (MILESTONES 1, 2, & 3 MODEL ANSWERS)
 
---------------------------------------------------------------------------------
-2. ARCHITECTURAL DESIGN TRADE-OFFS (THE "WHY" BEHIND EVERY DECISION)
---------------------------------------------------------------------------------
+================================================================================
+1. EXECUTIVE SUMMARY: WHAT PROBLEM ARE WE SOLVING & HOW?
+================================================================================
 
-[Trade-off 1]: Why PostgreSQL + pgvector instead of a dedicated Vector DB (Chroma, Pinecone, Weaviate)?
-- Answer:
-  1. ACID Transactions & Consistency: In a multi-tenant SaaS application, documents,
-     users, subscriptions, metadata, and embeddings must remain strictly synchronized.
-     If a user deletes a document, a single CASCADE DELETE in PostgreSQL atomically
-     removes the document, its chunks, and all its vector embeddings. With separate
-     vector stores (e.g., Pinecone + Postgres), you suffer from dual-write consistency
-     problems, orphan embeddings, and eventual consistency lag.
-  2. Single Network Hop & Hybrid Search: By keeping vectors inside PostgreSQL, we can
-     execute vector similarity search (pgvector) AND BM25-style keyword search (tsvector)
-     in a single database query, filtered directly by tenant (`user_id = :current_user_id`).
-  3. Operational Overhead & Cost: Operating, backing up, and monitoring one PostgreSQL
-     cluster is significantly cheaper and more reliable than paying for and managing
-     two disparate database clusters.
-  4. Maturity: PostgreSQL has 30+ years of battle-tested enterprise tooling, replication,
-     point-in-time recovery, and security.
+[The Real-World Problem]:
+Large Language Models (like GPT-4 or Gemini) have two fundamental limitations:
+1. Knowledge Cutoff & Hallucination: They do not know about private enterprise
+   documents, company source code, or internal confidential PDFs. When asked about
+   unfamiliar subjects, they frequently "hallucinate" confident-sounding falsehoods.
+2. Context Window & Cost Limitations: You cannot send a 500-page financial report
+   or a 50,000-line code repository in every single prompt. It is too expensive,
+   exceeds context limits, and takes 20+ seconds to process.
 
-[Trade-off 2]: Why Celery + Redis instead of synchronous HTTP processing or FastAPI BackgroundTasks?
-- Answer:
-  1. Heavy CPU & Network Blocking: Extracting text from a 100-page PDF, chunking it,
-     and calling embedding APIs for hundreds of chunks can take anywhere from 10 to 60+ seconds.
-     Doing this inside the HTTP request would block web server worker threads, exhaust
-     connection pools, cause client HTTP timeouts (504 Gateway Timeout), and kill API throughput.
-  2. FastAPI BackgroundTasks runs within the same process/memory space as the web server.
-     If the API server restarts, scales down, or crashes due to memory pressure, in-flight
-     jobs are permanently lost.
-  3. Celery + Redis provides a distributed, durable task queue with retries, exponential
-     backoff, worker concurrency management, rate limiting, and failure logging.
+[The Flaw in Tutorial RAG Projects]:
+90% of beginners build RAG as a 50-line Python script using LangChain, Streamlit,
+and an in-memory database (FAISS/Chroma). This fails in the real world:
+- It processes files synchronously inside the HTTP web request, crashing the server.
+- It has NO authentication: User A can see and search User B's proprietary files.
+- It uses naive keyword-only or vector-only search, missing exact function names or error codes.
+- It has no audit logging, no cost tracking, and no error recovery.
 
-[Trade-off 3]: Why direct SDK (Google Gemini `google-genai`) instead of LangChain or LlamaIndex?
-- Answer:
-  1. Production Transparency: LangChain abstracts SQL queries, prompt templates, and
-     vector calculations behind high-level chains. When latency spikes or queries return
-     hallucinations in production, debugging through 15 layers of nested abstraction is painful.
-  2. Performance & Dependency Bloat: Heavy wrapper frameworks add hundreds of transitive
-     dependencies, breaking changes across minor versions, and unexpected latency overhead.
-  3. Writing native SQL expressions and direct SDK calls demonstrates deep understanding of
-     underlying vectors, distance metrics (Cosine Distance `<=>`), and LLM context windows.
+[How DocuSense AI Solves This (The Solution We Built)]:
+DocuSense AI is a production-grade, multi-tenant SaaS backend API designed for
+verifiable document and code intelligence:
+1. Multi-Tenant Isolation: Every user is authenticated via stateless JWT tokens.
+   All database tables and similarity searches enforce strict tenant scoping
+   (`WHERE user_id = :current_user_id`).
+2. Asynchronous Ingestion Engine: When a user uploads a 50MB PDF or code file, the
+   FastAPI web server validates it, creates a PENDING database record, pushes the
+   processing job to a Redis queue, and immediately returns HTTP 202 Accepted.
+   A distributed Celery worker pool parses, chunks, and embeds the file in the background.
+3. Single-Store Hybrid Search (RRF): Instead of maintaining two separate databases,
+   we use PostgreSQL 16 with `pgvector`. We execute semantic vector search (cosine distance)
+   AND exact full-text keyword search (`tsvector`), merging them using Reciprocal Rank Fusion (RRF).
+4. Guarded Generation & Citations: Gemini generates answers strictly using the top
+   retrieved chunks. If information is missing, it explicitly replies "Insufficient information...".
+   Every fact is tagged with an exact citation (e.g. `[architecture.pdf, Page 2]`).
 
-[Trade-off 4]: Why UUIDs instead of auto-incrementing integer IDs?
-- Answer:
-  Auto-incrementing integers (1, 2, 3...) leak business metrics (competitors can gauge how
-  many users or documents you have) and are susceptible to Insecure Direct Object Reference
-  (IDOR) attacks if an authorization check fails. UUIDv4 provides cryptographically secure,
-  globally unique identifiers across distributed databases.
+================================================================================
+2. FIRST-PRINCIPLES CONCEPT DICTIONARY (THEORY, DEFINITIONS & REALITY)
+================================================================================
 
-[Trade-off 5]: Why 768 dimensions for pgvector?
-- Answer:
-  Google Gemini's modern embedding models (`models/gemini-embedding-001`) utilize Matryoshka
-  Representation Learning (MRL), allowing output dimensionality configuration. We set it to
-  768 dimensions, which perfectly matches PostgreSQL's `VECTOR(768)`. 768 dimensions provides
-  an ideal sweet spot: cutting memory and storage requirements by 75% compared to 3072 dimensions,
-  while retaining 99%+ of the semantic retrieval quality and dramatically speeding up index lookups.
+Use this section to explain the fundamentals if an interviewer asks: "What actually is an embedding?" or "How does JWT work under the hood?"
 
-[Trade-off 6]: Why sliding window chunking with overlap instead of naive fixed-size cuts?
-- Answer:
-  Naive splitting by character count (e.g. cutting every 500 characters) cuts words, code tokens,
-  and sentences in half (e.g., "funct" on chunk 1 and "ion" on chunk 2). A boundary-aware sliding
-  window searches for natural sentence/paragraph delimiters (`\n\n`, `. `, `? `). Overlap ensures
-  that any fact spanning the boundary between two chunks is present in both chunks, preventing
-  retrieval failure.
+1. RETRIEVAL-AUGMENTED GENERATION (RAG):
+   - Definition: An AI architecture that combines an information retrieval system
+     (a search engine over your private data) with a generative LLM.
+   - How it works: Instead of asking the LLM to answer from memory, we first search
+     our database for the top 5 most relevant paragraphs, paste them into the LLM prompt
+     as "Context", and instruct the LLM: "Answer the user question using ONLY this context."
 
-[Trade-off 7]: Why PyMuPDF (`fitz`) over pypdf or pdfplumber?
-- Answer:
-  PyMuPDF is built on the high-performance C++ MuPDF engine. In production benchmarks, it is
-  5x to 10x faster than pure-Python libraries like pypdf, handles complex multi-column layouts,
-  and reliably extracts page numbers essential for RAG source citations.
+2. VECTOR EMBEDDING (DENSE VECTOR):
+   - Definition: An embedding is a translation of human text (words, sentences, code)
+     into an array of floating-point numbers (a high-dimensional vector) where semantic
+     meaning is converted into mathematical coordinates.
+   - How it works: Texts with similar conceptual meanings end up close together in geometric
+     space. For example, the vector for "how to authenticate a user" is geometrically
+     very close to "JWT login verification", even though they share zero identical words.
+   - What we use: Google Gemini `models/gemini-embedding-001` configured to 768 dimensions.
 
---------------------------------------------------------------------------------
-3. MILESTONE 1 QUIZ - EASY TO UNDERSTAND MODEL ANSWERS
---------------------------------------------------------------------------------
+3. VECTOR DIMENSIONALITY (Why 768?):
+   - Definition: The number of floating-point coordinates in the vector array.
+   - Concept: Higher dimensions (e.g. 3072) can capture subtle nuances but require 4x more
+     RAM, disk space, and computational power to compare. Modern models use Matryoshka
+     Representation Learning (MRL), which trains embeddings so that the first 768 dimensions
+     retain 99%+ of the semantic search accuracy while cutting index memory by 75%.
+
+4. VECTOR DISTANCE METRICS (How Similarity is Calculated):
+   - Cosine Distance (`<=>` in pgvector):
+     Formula: 1 - (A · B) / (||A|| * ||B||)
+     Measures the cosine of the angle between two vectors. It ranges from 0 (identical
+     direction) to 2 (opposite direction). It ignores the magnitude/length of the text
+     and focuses purely on semantic direction. This is the gold standard for text RAG.
+   - Euclidean Distance (`<->` in pgvector):
+     Measures straight-line physical distance. Sensitive to text length/magnitude.
+   - Dot / Inner Product (`<#>` in pgvector):
+     Fastest mathematically, but only valid if all vectors are pre-normalized to unit length 1.
+
+5. TOKENIZATION & SLIDING WINDOW CHUNKING WITH OVERLAP:
+   - What is Chunking? LLMs cannot read infinite text. We must divide long documents
+     into manageable pieces (e.g. 800 characters each).
+   - The Failure of Naive Chunking: Cutting every 800 characters splits words (e.g. "func-"
+     and "tion()") and cuts sentences across paragraphs.
+   - Our Solution (Boundary-Aware Sliding Window): Our chunker searches backwards for
+     natural punctuation (`\n\n`, `. `, `! `, `? `).
+   - What is Overlap? We configure a 150-character overlap between chunk N and chunk N+1.
+     This guarantees that any sentence or concept located on the seam between two chunks
+     is preserved intact in both chunks, preventing retrieval blindness.
+
+6. MULTI-TENANCY & ROW-LEVEL DATA ISOLATION:
+   - Definition: A software architecture where multiple independent customers (tenants)
+     share the same application and database infrastructure, but their data is strictly isolated.
+   - Implementation: Every table (`documents`, `document_chunks`, `query_logs`) has a foreign
+     key `user_id`. Every SQL query executes with `WHERE user_id = :authenticated_user_id`.
+     No user can read, query, or delete another user's rows.
+
+7. JSON WEB TOKEN (JWT) & CRYPTOGRAPHIC SIGNATURE:
+   - Definition: A compact, URL-safe, stateless token format used to securely transmit
+     claims between parties.
+   - Anatomy: Three parts separated by dots: Header.Payload.Signature
+     1. Header: Algorithm used (e.g., HMAC-SHA256).
+     2. Payload: User UUID (`sub`), issue time (`iat`), expiration time (`exp`).
+     3. Signature: `HMACSHA256(base64(Header) + "." + base64(Payload), SECRET_KEY)`.
+   - Why it matters: The server does not need to query the database to verify if a token
+     is genuine; it mathematically recalculates the HMAC signature using `SECRET_KEY`. If
+     a malicious user tampers with the user ID in the payload, the signature check fails.
+
+8. SALTED BCRYPT PASSWORD HASHING:
+   - Why not SHA-256? SHA-256 is designed for fast file checksums. Attackers can compute
+     billions of SHA-256 hashes per second using GPUs, cracking weak passwords with rainbow tables.
+   - How Bcrypt Works: It uses a slow, adaptive key derivation function with an adjustable
+     work factor (12 rounds = $2^{12} = 4096$ iterations). It generates a cryptographically
+     random 16-byte salt per user, ensuring two identical passwords produce completely
+     different hashes.
+
+9. ASYNCHRONOUS TASK QUEUE (CELERY) & MESSAGE BROKER (REDIS):
+   - What is a Message Broker (Redis)? A high-speed in-memory data store used as a queue.
+     When a file is uploaded, the API server writes a small task message (e.g.,
+     "Process Document UUID 123") into a Redis list and immediately replies to the user.
+   - What is a Task Queue (Celery)? A distributed background worker system that listens
+     to Redis, pulls job messages off the queue, and executes heavy CPU/network work
+     (parsing PDF, calling embedding APIs, writing vectors to Postgres) across multiple
+     worker processes without blocking web requests.
+
+10. FULL-TEXT SEARCH (`tsvector` & `tsquery` in PostgreSQL):
+    - Concept: An inverted index that breaks text into linguistic stems (e.g., "running",
+      "runs", and "ran" all reduce to the stem "run") and strips common stop words ("the", "is").
+    - Why combine with vectors? Vector search is great for semantic ideas, but struggles
+      with exact technical identifiers (e.g., `ERROR_404_TIMEOUT`, `user_auth_v2()`).
+      Full-text search guarantees exact keyword and code token matches.
+
+11. RECIPROCAL RANK FUSION (RRF):
+    - Definition: An algorithmic rank-aggregation technique that merges ranked results
+      from multiple distinct retrieval engines without needing score calibration.
+    - Mathematical Formula:
+      RRF_Score(doc) = SUM_{engine in {vector, keyword}} [ 1 / (k + rank_{engine}(doc)) ]
+      where k is a smoothing constant (standard: 60).
+    - Why it works: If a chunk is ranked #1 in vector search and #2 in keyword search,
+      its RRF score is: (1 / (60 + 1)) + (1 / (60 + 2)) = 0.01639 + 0.01613 = 0.03252.
+      A chunk that only scored in vector search gets 0.01639. Documents that satisfy
+      BOTH semantic intent and exact keyword matches rise to the top.
+
+================================================================================
+3. SYSTEM ARCHITECTURE & END-TO-END DATA LIFECYCLE
+================================================================================
+
+Lifecycle of a Document (Upload to Grounded Answer):
+1. Registration & Auth:
+   - User sends `POST /api/v1/auth/register` with email & password.
+   - Password is salted and hashed with bcrypt (12 rounds) -> saved in PostgreSQL.
+   - User sends `POST /api/v1/auth/login` -> receives signed JWT token containing user UUID.
+2. Async Ingestion Pipeline (Milestones 2 & 3):
+   - User sends `POST /api/v1/documents/upload` with PDF or code file + Bearer Token.
+   - FastAPI dependency `get_current_user` validates JWT and extracts `user_id`.
+   - File size/type validated -> Document row created with status `PENDING`.
+   - Job dispatched to Redis broker -> HTTP 202 Accepted returned to client in < 50ms.
+   - Celery worker receives task:
+     * PDF parsed page-by-page with PyMuPDF (stamping page numbers).
+     * Code parsed line-by-line (stamping line numbers).
+     * Chunked into overlapping segments (800 chars, 150 overlap).
+     * Batched into groups of 30 chunks -> sent to Gemini embedding API.
+     * Chunks + 768-dim vectors + tsvector full-text indexes inserted into PostgreSQL.
+     * Document status updated to `COMPLETED`.
+3. Hybrid Retrieval & Grounded Query Pipeline (Milestone 3):
+   - User sends `POST /api/v1/chat/query` with question.
+   - Question converted to 768-dim embedding via Gemini.
+   - PostgreSQL executes Vector Search (cosine distance `<=>`) -> Top 15 chunks.
+   - PostgreSQL executes Full-Text Search (`tsvector @@ plainto_tsquery`) -> Top 15 chunks.
+   - Reciprocal Rank Fusion merges both ranks -> picks Top 5 chunks.
+   - Top 5 chunks formatted into strict system prompt sent to Gemini LLM (`gemini-3.5-flash-lite`).
+   - Gemini generates answer with exact inline citations (`[filename, Page X]`).
+   - Audit log saved into `query_logs` table (latency, tokens used, query, answer).
+
+================================================================================
+4. ARCHITECTURAL DESIGN TRADE-OFFS ("WHY THIS OVER THAT?")
+================================================================================
+
+[Trade-off 1]: PostgreSQL + pgvector vs. Standalone Vector DBs (Chroma, Pinecone, Milvus):
+- Dual-Write Bug Elimination: With Pinecone + Postgres, if you delete a user or document,
+  you have to perform two separate write operations. If Pinecone fails or lags, you have
+  orphan vector embeddings (data leak). In PostgreSQL, a single `CASCADE DELETE` removes
+  the document, chunks, and embeddings in one ACID transaction.
+- Operational Overhead: Operating one battle-tested PostgreSQL cluster is 5x cheaper
+  and simpler than managing two disparate database infrastructures.
+- Hybrid Search in One Query: We can combine relational user filters, full-text tsvector
+  matching, and pgvector cosine search in a single database hop.
+
+[Trade-off 2]: Celery + Redis vs. Synchronous HTTP or FastAPI BackgroundTasks:
+- Fast API Response: Ingestion of a 50-page PDF takes 15 seconds. If done synchronously,
+  the HTTP client experiences extreme latency, worker threads are blocked, and connection
+  pools deplete.
+- Resilience: FastAPI BackgroundTasks runs inside the web server process memory. If the server
+  crashes or restarts, in-flight jobs are permanently lost. Celery + Redis queues persist tasks
+  and provide automatic retries with exponential backoff.
+
+[Trade-off 3]: Direct SDK (Google GenAI) vs. LangChain / LlamaIndex:
+- LangChain wraps SQL queries, prompts, and vector calculations behind opaque multi-layered
+  abstractions. When queries hallucinate or latency spikes in production, debugging through
+  15 layers of wrapper code is impossible.
+- Writing native Python, raw SQL, and direct SDK calls ensures transparent, high-performance,
+  and easily testable code.
+
+[Trade-off 4]: Gemini-3.5-flash-lite vs. Heavy Foundation Models:
+- `gemini-3.5-flash-lite` provides sub-second latency, deterministic zero-temperature
+  factual grounding, and low token cost, perfectly suited for enterprise RAG.
+
+================================================================================
+5. MASTER INTERVIEW QUIZ REVISION (MODEL ANSWERS FOR ALL MILESTONES)
+================================================================================
+
+--- MILESTONE 1 QUIZ REVISION ---
 Q1: Why PostgreSQL 16 + pgvector instead of a separate vector DB like Chroma/Pinecone?
-A1: (1) Data Consistency (No Dual-Write Bug): When a user deletes a document in PostgreSQL,
-    CASCADE DELETE automatically deletes its chunks and embeddings in one transaction. With
-    external vector DBs, you have two databases that can easily get out of sync.
-    (2) Simpler Infrastructure & Lower Cost: Instead of paying for, monitoring, and maintaining
-    two separate databases, everything (relational user accounts, documents, full-text search,
-    and vector embeddings) lives inside one reliable database.
+A1: "Two reasons: First, transactional integrity. Storing vectors in PostgreSQL avoids the
+     'dual-write' problem—when a document is deleted, CASCADE DELETE atomically deletes its
+     chunks and embeddings. Second, operational simplicity and hybrid search. We can execute
+     relational filters, keyword search (tsvector), and vector search in one database hop."
 
-Q2: What does the JWT payload claim `sub` contain, and how is it used for multi-tenancy?
-A2: `sub` stands for "Subject" and contains the user's UUID (e.g. "a3b1...").
-    When a request comes in, our dependency `get_current_user` extracts this UUID from the token.
-    Then, every database query (e.g., `SELECT * FROM documents WHERE user_id = :user_id`)
-    filters strictly by this UUID. Because User A's token contains User A's UUID, User A can
-    never view or search User B's documents.
+Q2: What does the JWT claim `sub` contain, and how is it used for multi-tenancy?
+A2: "`sub` stands for Subject and stores the user's UUID. On every protected endpoint,
+     `get_current_user` extracts this UUID from the token. Every database query strictly
+     filters `WHERE user_id = :authenticated_user_id`, guaranteeing that User A can never
+     access or retrieve User B's documents."
 
 Q3: Why dimension 768, and what happens if a 1536-dim vector is inserted?
-A3: The dimension of the vector in PostgreSQL must match the embedding model exactly. We
-    configured Gemini embeddings with `output_dimensionality=768`, so the column is `VECTOR(768)`.
-    If you attempt to insert a 1536-dimensional vector into a `VECTOR(768)` column, PostgreSQL
-    will immediately reject the query with an error (`ERROR: different vector dimensions 768 and 1536`),
-    preventing corrupted or un-indexable vector data.
+A3: "Vector dimensions in PostgreSQL must match the embedding model output. Google Gemini
+     generates 768-dimensional embeddings. If you attempt to insert a 1536-dim vector into
+     a VECTOR(768) column, PostgreSQL throws an immediate error and rejects the insert to
+     prevent index corruption."
 
---------------------------------------------------------------------------------
-4. MILESTONE 2 SUMMARY & KEY COMPONENTS BUILT
---------------------------------------------------------------------------------
-1. Document Parsers (`services/parsers/`):
-   - `PDFParser`: Page-by-page text extraction with PyMuPDF, tracking page numbers for citations.
-   - `CodeAndTextParser`: Line-number aware parser for code (.py, .ts, .js) and markdown (.md).
-   - `parse_document`: Universal dispatcher validating against allowed file extensions.
-2. Chunking Engine (`services/chunker.py`):
-   - Sentence/paragraph-aware sliding window with configurable `chunk_size` and `chunk_overlap`.
-   - Attaches metadata (filename, page_number, start_line, end_line) to every chunk.
-3. Google Gemini Embedding Service (`services/embedding.py`):
-   - Direct integration with `google-genai` SDK using `models/gemini-embedding-001`.
-   - Configures `output_dimensionality=768` for optimal storage & speed.
-   - Batch embedding support (`generate_embeddings_batch`) for high ingestion throughput.
-4. Document Ingestion Service (`services/ingestion.py`):
-   - Synchronous processing pipeline: validates file size -> creates Document in PROCESSING state
-     -> extracts blocks -> chunks -> generates embeddings -> saves DocumentChunks -> marks COMPLETED.
-   - Full rollback and FAILED state update on error.
-5. Multi-Tenant Similarity Search (`services/retrieval.py`):
-   - Computes query vector using Gemini embedding service.
-   - Executes cosine distance search (`DocumentChunk.embedding.cosine_distance(query_embedding)`),
-     strictly scoped to `user_id == current_user.id`.
-   - Generates normalized similarity scores (`1.0 - cosine_distance`).
-6. Document REST Endpoints (`api/v1/endpoints/documents.py`):
-   - `POST /api/v1/documents/upload`: Multipart file upload, processing, returns chunk count.
-   - `GET /api/v1/documents`: Lists authenticated user's documents.
-   - `GET /api/v1/documents/{document_id}`: Owner-verified document detail lookup.
-   - `DELETE /api/v1/documents/{document_id}`: Cascade deletes document and chunks.
-   - `POST /api/v1/documents/search`: Vector search endpoint returning top relevant chunks.
+--- MILESTONE 2 QUIZ REVISION ---
+Q1: What is the difference between Cosine Distance (`<=>`) and Euclidean Distance (`<->`)?
+A1: "Cosine Distance measures the angle between vectors and is invariant to vector magnitude
+     (document length), making it ideal for text embeddings. Euclidean Distance measures
+     straight-line physical distance and is distorted by document length. Dot Product (`<#>`)
+     is fastest but requires unit-normalized vectors."
 
---------------------------------------------------------------------------------
-5. COMMON INTERVIEW QUESTIONS FOR MILESTONE 2
---------------------------------------------------------------------------------
-Q1: "How do you choose between Cosine Distance, Euclidean Distance, and Inner Product for vectors?"
-A1: "Cosine Distance (`<=>` in pgvector) measures the angular difference between vectors,
-     making it invariant to vector magnitude (document length). It is ideal for text embeddings.
-     Euclidean Distance (`<->`) measures straight-line physical distance and is sensitive to length.
-     Inner/Dot Product (`<#>`) is fastest but only equivalent to cosine distance if all vectors
-     are pre-normalized to unit length (L2 norm = 1)."
+Q2: What is chunk overlap, and what failure mode does it prevent?
+A2: "Chunk overlap shares a window of text (e.g. 150 characters) between consecutive chunks.
+     It prevents retrieval failure when a key fact or concept crosses the boundary between
+     two adjacent chunks."
 
-Q2: "What is chunk overlap, and why is it essential in RAG?"
-A2: "Chunk overlap means sharing a small window of text (e.g. 100-150 characters) between
-     adjacent chunks. Without overlap, critical semantic relationships that happen to cross
-     the boundary between chunk N and chunk N+1 get severed, leading to retrieval failures
-     when the user's question depends on information spanning both chunks."
+Q3: Why implement batch embedding instead of one API call per chunk?
+A3: "Generating embeddings chunk-by-chunk introduces 100 sequential HTTP round-trips (~20s)
+     and triggers API rate limits. Batching sends 30 chunks per call, reducing network overhead
+     from 100 round-trips down to 3, slashing ingestion time by 85%."
 
-Q3: "Why did you implement batch embedding instead of generating embeddings chunk by chunk?"
-A3: "Generating embeddings chunk-by-chunk introduces substantial network latency: 100 chunks
-     at 200ms per HTTP request would take 20 seconds of sequential round-trips, plus it quickly
-     hits API rate limits (RPM - Requests Per Minute). Batching sends up to 30-50 chunks in a
-     single HTTP request, reducing network roundtrips from 100 down to 2 or 3 and slashing ingestion time."
+--- MILESTONE 3 QUIZ REVISION ---
+Q1: Why is Hybrid Search (Vector + Keyword via RRF) superior to pure vector search?
+A1: "Pure vector search excels at conceptual matching but struggles with exact identifiers,
+     function names (e.g. `auth_provider_v2`), and specific error codes. Full-text search
+     (tsvector) excels at exact token matches but misses synonyms. Reciprocal Rank Fusion
+     merges both rankings, elevating documents that satisfy both semantic meaning and exact keywords."
+
+Q2: How does Reciprocal Rank Fusion (RRF) calculate candidate ranking?
+A2: "For every retrieved chunk, its score is: SUM [ 1 / (60 + rank_in_engine) ].
+     It scores candidates based on their rank order rather than raw similarity scores,
+     avoiding the need to calibrate or normalize dissimilar score distributions."
+
+Q3: How do we prevent LLM hallucinations and enforce verifiable citations?
+A3: "We enforce two guardrails: First, a system prompt with zero temperature instructing the
+     LLM to answer ONLY from the provided context chunks and to output 'Insufficient information...'
+     if the answer is missing. Second, the prompt mandates inline citations ([filename, Page X]),
+     which our backend extracts and validates against the retrieved chunk metadata."
