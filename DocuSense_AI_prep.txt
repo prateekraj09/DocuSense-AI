@@ -1,0 +1,124 @@
+================================================================================
+                    DOCUSENSE AI - INTERVIEW PREPARATION GUIDE
+================================================================================
+Author: Prateek (Guided by Principal Software Engineer)
+Project: DocuSense AI (Multi-Tenant Production Document & Code Intelligence API)
+Target Role: AI Software Engineer / Backend Systems Engineer (Production RAG)
+================================================================================
+
+--------------------------------------------------------------------------------
+1. PROJECT ELEVATOR PITCH (HOW TO INTRODUCE THIS PROJECT IN AN INTERVIEW)
+--------------------------------------------------------------------------------
+"DocuSense AI is a production-grade, multi-tenant SaaS backend for Document and
+Code Intelligence built with FastAPI, PostgreSQL 16 (pgvector), and Google Gemini.
+Unlike tutorial RAG scripts that process documents synchronously in memory and 
+leak data between users, DocuSense AI implements enterprise-grade multi-tenant 
+data isolation via JWT authentication, offloads parsing and embedding generation 
+to asynchronous Celery/Redis background workers, and executes single-store hybrid 
+retrieval combining pgvector cosine distance and PostgreSQL tsvector full-text 
+search via Reciprocal Rank Fusion (RRF). It also incorporates Redis semantic/exact 
+caching and token usage tracking to minimize LLM latency and API costs."
+
+--------------------------------------------------------------------------------
+2. ARCHITECTURAL DESIGN TRADE-OFFS (THE "WHY" BEHIND EVERY DECISION)
+--------------------------------------------------------------------------------
+
+[Trade-off 1]: Why PostgreSQL + pgvector instead of a dedicated Vector DB (Chroma, Pinecone, Weaviate)?
+- Answer:
+  1. ACID Transactions & Consistency: In a multi-tenant SaaS application, documents,
+     users, subscriptions, metadata, and embeddings must remain strictly synchronized.
+     If a user deletes a document, a single CASCADE DELETE in PostgreSQL atomically
+     removes the document, its chunks, and all its vector embeddings. With separate
+     vector stores (e.g., Pinecone + Postgres), you suffer from dual-write consistency
+     problems, orphan embeddings, and eventual consistency lag.
+  2. Single Network Hop & Hybrid Search: By keeping vectors inside PostgreSQL, we can
+     execute vector similarity search (pgvector) AND BM25-style keyword search (tsvector)
+     in a single database query, filtered directly by tenant (`user_id = :current_user_id`).
+  3. Operational Overhead & Cost: Operating, backing up, and monitoring one PostgreSQL
+     cluster is significantly cheaper and more reliable than paying for and managing
+     two disparate database clusters.
+  4. Maturity: PostgreSQL has 30+ years of battle-tested enterprise tooling, replication,
+     point-in-time recovery, and security.
+
+[Trade-off 2]: Why Celery + Redis instead of synchronous HTTP processing or FastAPI BackgroundTasks?
+- Answer:
+  1. Heavy CPU & Network Blocking: Extracting text from a 100-page PDF, chunking it,
+     and calling embedding APIs for hundreds of chunks can take anywhere from 10 to 60+ seconds.
+     Doing this inside the HTTP request would block web server worker threads, exhaust
+     connection pools, cause client HTTP timeouts (504 Gateway Timeout), and kill API throughput.
+  2. FastAPI BackgroundTasks runs within the same process/memory space as the web server.
+     If the API server restarts, scales down, or crashes due to memory pressure, in-flight
+     jobs are permanently lost.
+  3. Celery + Redis provides a distributed, durable task queue with retries, exponential
+     backoff, worker concurrency management, rate limiting, and failure logging.
+
+[Trade-off 3]: Why direct SDK (Google Gemini `google-genai`) instead of LangChain or LlamaIndex?
+- Answer:
+  1. Production Transparency: LangChain abstracts SQL queries, prompt templates, and
+     vector calculations behind high-level chains. When latency spikes or queries return
+     hallucinations in production, debugging through 15 layers of nested abstraction is painful.
+  2. Performance & Dependency Bloat: Heavy wrapper frameworks add hundreds of transitive
+     dependencies, breaking changes across minor versions, and unexpected latency overhead.
+  3. Writing native SQL expressions and direct SDK calls demonstrates deep understanding of
+     underlying vectors, distance metrics (Cosine Distance `<=>`), and LLM context windows.
+
+[Trade-off 4]: Why UUIDs instead of auto-incrementing integer IDs?
+- Answer:
+  Auto-incrementing integers (1, 2, 3...) leak business metrics (competitors can gauge how
+  many users or documents you have) and are susceptible to Insecure Direct Object Reference
+  (IDOR) attacks if an authorization check fails. UUIDv4 provides cryptographically secure,
+  globally unique identifiers across distributed databases.
+
+[Trade-off 5]: Why 768 dimensions for pgvector?
+- Answer:
+  We chose Google Gemini's `text-embedding-004` model, which generates 768-dimensional
+  dense vector representations. Dimension size in PostgreSQL must match the embedding model
+  exactly (`VECTOR(768)`). 768 dimensions offers an exceptional sweet spot between retrieval
+  accuracy, memory footprint, and index traversal speed (HNSW).
+
+--------------------------------------------------------------------------------
+3. MILESTONE 1 SUMMARY & KEY COMPONENTS BUILT
+--------------------------------------------------------------------------------
+1. Containerization & Services (Docker Compose):
+   - PostgreSQL 16 with `pgvector` extension enabled on boot (`docker/init.sql`).
+   - Redis 7 for caching, rate limiting, and message queue.
+   - Multi-stage Dockerfile for containerized deployment.
+2. Configuration & Security (`core/config.py`, `core/security.py`):
+   - Strict Pydantic v2 Settings reading validated environment variables.
+   - Salted password hashing with `bcrypt` (12 rounds) to prevent rainbow table attacks.
+   - Stateless JWT tokens signed with HMAC-SHA256 containing expiration and user UUID.
+3. Database Models & Schema (`db/models.py`):
+   - `User`: Handles identity and password hashes.
+   - `Document`: Manages document lifecycle and processing statuses (PENDING -> PROCESSING -> COMPLETED/FAILED).
+   - `DocumentChunk`: Stores text chunks, page/file metadata (JSONB), 768-dim embeddings (pgvector), and full-text search vectors (tsvector).
+   - `QueryLog`: Tracks audit logs, prompt/completion tokens, latency, and cache hits.
+4. Protected API Endpoints (`api/v1/endpoints/auth.py`, `api/deps.py`):
+   - `POST /api/v1/auth/register`: Duplicate validation, hashing, 201 Created.
+   - `POST /api/v1/auth/login`: Credential validation, JWT generation.
+   - `GET /api/v1/auth/me`: HTTPBearer token extraction, signature verification, user lookup.
+
+--------------------------------------------------------------------------------
+4. COMMON INTERVIEW QUESTIONS FOR MILESTONE 1
+--------------------------------------------------------------------------------
+Q1: "How do you ensure multi-tenant data isolation in your RAG application?"
+A1: "We enforce multi-tenancy at two levels: Authentication and Database Querying.
+     First, every API request passes through a dependency (`get_current_user`) that
+     cryptographically verifies the JWT Bearer token and extracts the authenticated
+     user's UUID.
+     Second, all database queries for documents, chunks, and similarity searches explicitly
+     filter by `user_id == current_user.id`. There is no global search query that lacks
+     the `user_id` predicate, guaranteeing that User A can never retrieve User B's embeddings."
+
+Q2: "What happens if a user submits a weak password or an invalid email?"
+A2: "FastAPI and Pydantic v2 enforce compile-time and runtime validation. The
+     `UserRegisterRequest` schema utilizes `EmailStr` to validate RFC-compliant email
+     formats and enforces strict string constraints (`min_length=8, max_length=128`).
+     If validation fails, FastAPI automatically returns a structured `422 Unprocessable Entity`
+     error with field-level details before the request ever reaches the database."
+
+Q3: "Why did you use bcrypt instead of SHA-256 or MD5 for password storage?"
+A3: "SHA-256 and MD5 are cryptographic hash functions designed to be fast; modern GPUs
+     can calculate billions of SHA-256 hashes per second, making them vulnerable to brute-force
+     and rainbow table attacks. Bcrypt is a key derivation function designed to be deliberately
+     slow and memory-intensive (adaptive cost factor). It automatically handles per-user salt
+     generation, making precomputed rainbow tables completely ineffective."
