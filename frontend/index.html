@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DocuSense AI - Multi-Tenant Intelligence Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    @keyframes pulse-subtle { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+    .animate-pulse-subtle { animation: pulse-subtle 2s infinite ease-in-out; }
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: #1e293b; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 flex flex-col h-screen overflow-hidden font-sans">
+
+  <!-- Header -->
+  <header class="bg-slate-900 border-b border-slate-800 px-6 py-3.5 flex items-center justify-between shrink-0 shadow-sm">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-bold shadow-md shadow-indigo-500/20">
+        <i class="fa-solid fa-brain"></i>
+      </div>
+      <div>
+        <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+          DocuSense <span class="text-indigo-400">AI</span>
+          <span class="text-[10px] font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-full uppercase tracking-wider">Enterprise RAG</span>
+        </h1>
+        <p class="text-xs text-slate-400">Multi-Tenant Document & Code Intelligence Platform</p>
+      </div>
+    </div>
+
+    <!-- User / Auth Status -->
+    <div class="flex items-center gap-3">
+      <div id="authStatusBadge" class="hidden items-center gap-2 bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs">
+        <i class="fa-solid fa-user-circle text-indigo-400 text-sm"></i>
+        <span id="userEmailSpan" class="font-medium text-slate-200"></span>
+        <button onclick="logout()" class="ml-2 text-rose-400 hover:text-rose-300 transition" title="Logout">
+          <i class="fa-solid fa-right-from-bracket"></i>
+        </button>
+      </div>
+
+      <div id="loggedOutButtons" class="flex items-center gap-2">
+        <button onclick="openAuthModal('login')" class="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">
+          Sign In
+        </button>
+        <button onclick="openAuthModal('register')" class="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition">
+          Register
+        </button>
+      </div>
+
+      <a href="/docs" target="_blank" class="text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-slate-800 transition">
+        <i class="fa-solid fa-book-open"></i> API Docs
+      </a>
+    </div>
+  </header>
+
+  <!-- Main Body Grid -->
+  <div class="flex flex-1 overflow-hidden">
+
+    <!-- Left Sidebar: Document Management -->
+    <aside class="w-80 bg-slate-900/60 border-r border-slate-800 flex flex-col shrink-0">
+      <div class="p-4 border-b border-slate-800">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3 flex items-center justify-between">
+          <span>Uploaded Knowledge Base</span>
+          <span id="docCountBadge" class="bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded text-[11px] font-mono">0</span>
+        </h2>
+
+        <!-- Upload Form -->
+        <div id="uploadContainer" class="border-2 border-dashed border-slate-700 hover:border-indigo-500/60 bg-slate-800/40 rounded-xl p-4 text-center cursor-pointer transition">
+          <input type="file" id="fileInput" class="hidden" accept=".pdf,.txt,.md,.py,.js,.ts,.json" onchange="handleFileSelected(event)">
+          <div onclick="document.getElementById('fileInput').click()">
+            <i class="fa-solid fa-cloud-arrow-up text-2xl text-slate-400 mb-2"></i>
+            <p class="text-xs font-medium text-slate-200">Click to upload file</p>
+            <p class="text-[10px] text-slate-400 mt-1">PDF, Markdown, Python, Code (Max 10MB)</p>
+          </div>
+        </div>
+
+        <div id="uploadProgress" class="hidden mt-3">
+          <div class="flex justify-between text-xs text-slate-400 mb-1">
+            <span id="uploadingFileName" class="truncate max-w-[180px]">Ingesting...</span>
+            <span class="animate-pulse text-indigo-400 font-semibold">Processing</span>
+          </div>
+          <div class="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+            <div class="bg-indigo-500 h-full w-2/3 animate-pulse"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Document List -->
+      <div id="docListContainer" class="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
+        <!-- Rendered dynamically -->
+      </div>
+
+      <div class="p-3 border-t border-slate-800 bg-slate-900/90 text-[11px] text-slate-500 flex items-center justify-between">
+        <span>PostgreSQL 16 + pgvector</span>
+        <span class="flex items-center gap-1.5 text-emerald-400 font-medium">
+          <span class="w-2 h-2 rounded-full bg-emerald-400"></span> Connected
+        </span>
+      </div>
+    </aside>
+
+    <!-- Right Workspace: Grounded Chat & SSE Streaming -->
+    <main class="flex-1 flex flex-col bg-slate-950 overflow-hidden relative">
+      
+      <!-- Top Chat Controls Bar -->
+      <div class="h-12 border-b border-slate-800 px-6 flex items-center justify-between text-xs bg-slate-900/30">
+        <div class="flex items-center gap-4">
+          <span class="text-slate-400 font-medium flex items-center gap-2">
+            <i class="fa-solid fa-sliders text-indigo-400"></i> Mode:
+          </span>
+          <label class="flex items-center gap-1.5 cursor-pointer text-slate-300">
+            <input type="radio" name="queryMode" value="sse" checked class="accent-indigo-600">
+            <span>Server-Sent Events (Live Stream)</span>
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer text-slate-300">
+            <input type="radio" name="queryMode" value="cached" class="accent-indigo-600">
+            <span>Cached JSON Query</span>
+          </label>
+        </div>
+
+        <div id="latencyMetricPill" class="hidden items-center gap-2 font-mono text-[11px] bg-slate-800/80 px-2.5 py-1 rounded-full border border-slate-700">
+          <!-- Injected dynamically -->
+        </div>
+      </div>
+
+      <!-- Messages Window -->
+      <div id="chatMessages" class="flex-1 overflow-y-auto p-6 space-y-5 custom-scrollbar">
+        <!-- Welcome banner -->
+        <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-5 max-w-2xl mx-auto text-center">
+          <div class="w-12 h-12 rounded-full bg-indigo-600/20 text-indigo-400 flex items-center justify-center mx-auto mb-3 text-xl">
+            <i class="fa-solid fa-shield-halved"></i>
+          </div>
+          <h3 class="text-base font-bold text-white mb-1">Grounded Document & Code Intelligence</h3>
+          <p class="text-xs text-slate-400 max-w-md mx-auto mb-4">
+            Upload your technical documents or codebases on the left. DocuSense AI queries them with strict source citations and zero hallucinations.
+          </p>
+          <div class="flex flex-wrap justify-center gap-2 text-xs">
+            <button onclick="setSamplePrompt('What database and vector dimensions does DocuSense AI use?')" class="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-700 transition">
+              💡 What database & vector dimensions are used?
+            </button>
+            <button onclick="setSamplePrompt('How does multi-tenant data isolation work?')" class="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-700 transition">
+              💡 How does multi-tenancy work?
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Input Bar -->
+      <div class="p-4 border-t border-slate-800 bg-slate-900/60">
+        <form onsubmit="handleSendQuery(event)" class="max-w-4xl mx-auto relative flex items-center">
+          <input
+            type="text"
+            id="queryInput"
+            placeholder="Ask a question about your uploaded documents or code..."
+            class="w-full bg-slate-900 border border-slate-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-slate-100 placeholder-slate-500 rounded-xl px-4 py-3.5 pr-24 text-sm outline-none transition shadow-inner"
+            required
+          />
+          <button
+            type="submit"
+            id="sendBtn"
+            class="absolute right-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-4 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow transition disabled:opacity-50"
+          >
+            <span>Ask</span> <i class="fa-solid fa-arrow-up text-[10px]"></i>
+          </button>
+        </form>
+        <p class="text-[11px] text-center text-slate-500 mt-2">
+          Responses are strictly grounded in your private documents. Non-answerable questions trigger anti-hallucination guardrails.
+        </p>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- Auth Modal -->
+  <div id="authModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm hidden items-center justify-center p-4 z-50">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-sm p-6 shadow-2xl relative">
+      <button onclick="closeAuthModal()" class="absolute top-4 right-4 text-slate-500 hover:text-slate-300">
+        <i class="fa-solid fa-xmark text-lg"></i>
+      </button>
+
+      <h3 id="authModalTitle" class="text-base font-bold text-white mb-1">Sign In to DocuSense AI</h3>
+      <p class="text-xs text-slate-400 mb-4">Access your private multi-tenant document vault.</p>
+
+      <form onsubmit="handleAuthSubmit(event)" class="space-y-3">
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">Email</label>
+          <input type="email" id="authEmail" required value="engineer@docusense.ai" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none focus:border-indigo-500">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">Password</label>
+          <input type="password" id="authPassword" required value="SecurePass123!" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none focus:border-indigo-500">
+        </div>
+
+        <button type="submit" id="authSubmitBtn" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2 rounded-lg text-xs transition shadow-md mt-2">
+          Sign In
+        </button>
+
+        <p id="authErrorMsg" class="text-xs text-rose-400 text-center hidden"></p>
+
+        <div class="text-center pt-2 border-t border-slate-800 text-xs text-slate-400">
+          <span id="authToggleText">Don't have an account?</span>
+          <button type="button" onclick="toggleAuthMode()" id="authToggleBtn" class="text-indigo-400 hover:underline font-semibold ml-1">
+            Register
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- JavaScript Client Logic -->
+  <script>
+    let authToken = localStorage.getItem("docusense_token");
+    let currentAuthMode = "login";
+
+    // Initialize App
+    window.addEventListener("DOMContentLoaded", () => {
+      if (authToken) {
+        verifyAuthUser();
+        fetchDocuments();
+      } else {
+        openAuthModal("login");
+      }
+    });
+
+    // Auth Utilities
+    function openAuthModal(mode) {
+      currentAuthMode = mode;
+      document.getElementById("authModalTitle").innerText = mode === "login" ? "Sign In to DocuSense AI" : "Create Account";
+      document.getElementById("authSubmitBtn").innerText = mode === "login" ? "Sign In" : "Register Account";
+      document.getElementById("authToggleText").innerText = mode === "login" ? "Don't have an account?" : "Already have an account?";
+      document.getElementById("authToggleBtn").innerText = mode === "login" ? "Register" : "Sign In";
+      document.getElementById("authErrorMsg").classList.add("hidden");
+      document.getElementById("authModal").classList.remove("hidden");
+      document.getElementById("authModal").classList.add("flex");
+    }
+
+    function closeAuthModal() {
+      document.getElementById("authModal").classList.add("hidden");
+      document.getElementById("authModal").classList.remove("flex");
+    }
+
+    function toggleAuthMode() {
+      openAuthModal(currentAuthMode === "login" ? "register" : "login");
+    }
+
+    async function handleAuthSubmit(e) {
+      e.preventDefault();
+      const email = document.getElementById("authEmail").value.trim();
+      const password = document.getElementById("authPassword").value;
+      const errorMsg = document.getElementById("authErrorMsg");
+      errorMsg.classList.add("hidden");
+
+      try {
+        if (currentAuthMode === "register") {
+          // Register first
+          const regRes = await fetch("/api/v1/auth/register", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password })
+          });
+          if (!regRes.ok) {
+            const err = await regRes.json();
+            throw new Error(err.detail || "Registration failed");
+          }
+        }
+
+        // Login to get token
+        const loginRes = await fetch("/api/v1/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password })
+        });
+
+        if (!loginRes.ok) {
+          const err = await loginRes.json();
+          throw new Error(err.detail || "Authentication failed");
+        }
+
+        const data = await loginRes.json();
+        authToken = data.access_token;
+        localStorage.setItem("docusense_token", authToken);
+        closeAuthModal();
+        verifyAuthUser();
+        fetchDocuments();
+
+      } catch (err) {
+        errorMsg.innerText = err.message;
+        errorMsg.classList.remove("hidden");
+      }
+    }
+
+    async function verifyAuthUser() {
+      try {
+        const res = await fetch("/api/v1/auth/me", {
+          headers: { "Authorization": `Bearer ${authToken}` }
+        });
+        if (res.ok) {
+          const user = await res.json();
+          document.getElementById("userEmailSpan").innerText = user.email;
+          document.getElementById("authStatusBadge").classList.remove("hidden");
+          document.getElementById("authStatusBadge").classList.add("flex");
+          document.getElementById("loggedOutButtons").classList.add("hidden");
+        } else {
+          logout();
+        }
+      } catch (e) {
+        logout();
+      }
+    }
+
+    function logout() {
+      authToken = null;
+      localStorage.removeItem("docusense_token");
+      document.getElementById("authStatusBadge").classList.add("hidden");
+      document.getElementById("loggedOutButtons").classList.remove("hidden");
+      document.getElementById("docListContainer").innerHTML = "";
+      document.getElementById("docCountBadge").innerText = "0";
+      openAuthModal("login");
+    }
+
+    // Document Management
+    async function fetchDocuments() {
+      if (!authToken) return;
+      try {
+        const res = await fetch("/api/v1/documents", {
+          headers: { "Authorization": `Bearer ${authToken}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          renderDocumentList(data.documents);
+        }
+      } catch (e) {
+        console.error("Failed to load documents", e);
+      }
+    }
+
+    function renderDocumentList(docs) {
+      const container = document.getElementById("docListContainer");
+      document.getElementById("docCountBadge").innerText = docs.length;
+
+      if (docs.length === 0) {
+        container.innerHTML = `
+          <div class="text-center py-8 text-slate-500 text-xs">
+            <i class="fa-solid fa-folder-open text-2xl mb-2"></i>
+            <p>No documents uploaded yet.</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = docs.map(doc => `
+        <div class="bg-slate-800/60 border border-slate-700/60 hover:border-slate-600 rounded-xl p-3 text-xs transition flex items-start justify-between group">
+          <div class="min-w-0 pr-2">
+            <div class="font-medium text-slate-200 truncate flex items-center gap-1.5" title="${doc.filename}">
+              <i class="fa-regular ${doc.filename.endsWith('.pdf') ? 'fa-file-pdf text-rose-400' : 'fa-file-code text-indigo-400'}"></i>
+              <span class="truncate">${doc.filename}</span>
+            </div>
+            <div class="flex items-center gap-2 mt-1.5 text-[11px] text-slate-400">
+              <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono ${doc.status === 'COMPLETED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'}">
+                ${doc.status}
+              </span>
+              <span>${doc.chunk_count || 0} chunks</span>
+            </div>
+          </div>
+          <button onclick="deleteDoc('${doc.id}')" class="text-slate-500 hover:text-rose-400 transition p-1 opacity-0 group-hover:opacity-100" title="Delete document">
+            <i class="fa-solid fa-trash-can"></i>
+          </button>
+        </div>
+      `).join("");
+    }
+
+    async function handleFileSelected(event) {
+      const file = event.target.files[0];
+      if (!file || !authToken) return;
+
+      const progress = document.getElementById("uploadProgress");
+      document.getElementById("uploadingFileName").innerText = file.name;
+      progress.classList.remove("hidden");
+
+      const formData = new FormData();
+      formData.append("file", file);
+
+      try {
+        // Upload with sync=true so it chunks and embeds immediately for direct testing
+        const res = await fetch("/api/v1/documents/upload?sync=true", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${authToken}` },
+          body: formData
+        });
+
+        if (!res.ok) {
+          const err = await res.json();
+          alert(`Upload failed: ${err.detail}`);
+        } else {
+          await fetchDocuments();
+        }
+      } catch (e) {
+        alert(`Upload error: ${e.message}`);
+      } finally {
+        progress.classList.add("hidden");
+        document.getElementById("fileInput").value = "";
+      }
+    }
+
+    async function deleteDoc(docId) {
+      if (!confirm("Are you sure you want to delete this document? Cascades delete to all chunks & embeddings.")) return;
+      try {
+        const res = await fetch(`/api/v1/documents/${docId}`, {
+          method: "DELETE",
+          headers: { "Authorization": `Bearer ${authToken}` }
+        });
+        if (res.ok) {
+          fetchDocuments();
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    // Chat Execution
+    function setSamplePrompt(text) {
+      document.getElementById("queryInput").value = text;
+      document.getElementById("queryInput").focus();
+    }
+
+    async function handleSendQuery(e) {
+      e.preventDefault();
+      const input = document.getElementById("queryInput");
+      const query = input.value.trim();
+      if (!query || !authToken) return;
+
+      input.value = "";
+      appendMessage("user", query);
+
+      const mode = document.querySelector('input[name="queryMode"]:checked').value;
+      const sendBtn = document.getElementById("sendBtn");
+      sendBtn.disabled = true;
+
+      if (mode === "sse") {
+        await executeSSEStreamingQuery(query);
+      } else {
+        await executeCachedJSONQuery(query);
+      }
+
+      sendBtn.disabled = false;
+    }
+
+    function appendMessage(sender, text, metadata = null) {
+      const container = document.getElementById("chatMessages");
+      const isUser = sender === "user";
+
+      const msgDiv = document.createElement("div");
+      msgDiv.className = `flex gap-3 max-w-3xl ${isUser ? 'ml-auto justify-end' : ''}`;
+
+      const avatar = isUser
+        ? `<div class="w-7 h-7 rounded-full bg-slate-700 flex items-center justify-center text-xs shrink-0 order-2"><i class="fa-solid fa-user text-slate-300"></i></div>`
+        : `<div class="w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center text-xs text-white shrink-0"><i class="fa-solid fa-brain"></i></div>`;
+
+      let citationPills = "";
+      if (metadata && metadata.citations && metadata.citations.length > 0) {
+        citationPills = `
+          <div class="mt-3 pt-2.5 border-t border-slate-700/60 flex flex-wrap gap-1.5 items-center">
+            <span class="text-[10px] uppercase font-bold text-slate-400">Sources:</span>
+            ${metadata.citations.map(c => `
+              <span class="inline-flex items-center gap-1 bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 px-2 py-0.5 rounded text-[11px]" title="${c.snippet || ''}">
+                <i class="fa-solid fa-link text-[9px]"></i> ${c.source} (${c.location})
+              </span>
+            `).join("")}
+          </div>
+        `;
+      }
+
+      msgDiv.innerHTML = `
+        ${avatar}
+        <div class="bg-slate-900 border ${isUser ? 'border-slate-700 bg-indigo-950/20 text-slate-100' : 'border-slate-800 text-slate-200'} rounded-2xl p-4 text-xs leading-relaxed max-w-2xl shadow-sm">
+          <div class="message-content whitespace-pre-wrap">${text}</div>
+          ${citationPills}
+        </div>
+      `;
+
+      container.appendChild(msgDiv);
+      container.scrollTop = container.scrollHeight;
+      return msgDiv;
+    }
+
+    async function executeCachedJSONQuery(query) {
+      const t0 = performance.now();
+      try {
+        const res = await fetch("/api/v1/chat/query", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${authToken}`
+          },
+          body: JSON.stringify({ query, top_k: 5 })
+        });
+
+        if (!res.ok) {
+          const err = await res.json();
+          appendMessage("bot", `Error: ${err.detail}`);
+          return;
+        }
+
+        const data = await res.json();
+        appendMessage("bot", data.answer, { citations: data.citations });
+
+        // Update latency metric pill
+        const pill = document.getElementById("latencyMetricPill");
+        pill.classList.remove("hidden");
+        pill.classList.add("flex");
+        pill.innerHTML = `
+          <i class="fa-solid fa-bolt ${data.cache_hit ? 'text-amber-400' : 'text-slate-400'}"></i>
+          <span>${data.latency_ms}ms</span>
+          <span class="text-[10px] px-1.5 py-0.2 rounded font-semibold ${data.cache_hit ? 'bg-amber-400/10 text-amber-300' : 'bg-slate-700 text-slate-300'}">
+            ${data.cache_hit ? 'Redis Cache HIT' : 'Cache MISS'}
+          </span>
+        `;
+
+      } catch (e) {
+        appendMessage("bot", `Connection error: ${e.message}`);
+      }
+    }
+
+    async function executeSSEStreamingQuery(query) {
+      const msgDiv = appendMessage("bot", "");
+      const contentElem = msgDiv.querySelector(".message-content");
+      contentElem.innerHTML = `<span class="animate-pulse text-indigo-400 font-mono">Retrieving hybrid chunks & streaming...</span>`;
+
+      try {
+        const response = await fetch("/api/v1/chat/stream", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${authToken}`
+          },
+          body: JSON.stringify({ query, top_k: 5 })
+        });
+
+        if (!response.ok) {
+          contentElem.innerText = `Error: ${response.statusText}`;
+          return;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let accumulatedText = "";
+        let citations = [];
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunkStr = decoder.decode(value, { stream: true });
+          const lines = chunkStr.split("\n\n");
+
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              const payloadStr = line.slice(6).trim();
+              if (payloadStr === "[DONE]") break;
+
+              try {
+                const event = JSON.parse(payloadStr);
+                if (event.type === "token") {
+                  if (accumulatedText === "") contentElem.innerText = "";
+                  accumulatedText += event.content;
+                  contentElem.innerText = accumulatedText;
+                } else if (event.type === "citations") {
+                  citations = event.citations;
+                }
+              } catch (e) {}
+            }
+          }
+        }
+
+        if (citations.length > 0) {
+          const citContainer = document.createElement("div");
+          citContainer.className = "mt-3 pt-2.5 border-t border-slate-700/60 flex flex-wrap gap-1.5 items-center";
+          citContainer.innerHTML = `
+            <span class="text-[10px] uppercase font-bold text-slate-400">Sources:</span>
+            ${citations.map(c => `
+              <span class="inline-flex items-center gap-1 bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 px-2 py-0.5 rounded text-[11px]" title="${c.snippet || ''}">
+                <i class="fa-solid fa-link text-[9px]"></i> ${c.source} (${c.location})
+              </span>
+            `).join("")}
+          `;
+          msgDiv.querySelector("div").appendChild(citContainer);
+        }
+
+      } catch (e) {
+        contentElem.innerText = `Streaming failure: ${e.message}`;
+      }
+    }
+  </script>
+</body>
+</html>

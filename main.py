@@ -3,6 +3,7 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from slowapi.errors import RateLimitExceeded
 
 from api.v1.router import api_router
@@ -53,12 +54,22 @@ app.add_middleware(
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
 
+@app.get("/ui", tags=["Frontend"], include_in_schema=False)
+async def serve_ui():
+    """Serves the interactive DocuSense AI web dashboard."""
+    import os
+    if os.path.exists("frontend/index.html"):
+        return FileResponse("frontend/index.html")
+    return {"detail": "Frontend UI file not found."}
+
+
 @app.get("/", tags=["Health"])
 async def root():
     return {
         "service": settings.PROJECT_NAME,
         "status": "online",
         "version": "1.0.0",
+        "web_ui": "/ui",
         "docs_url": "/docs",
     }
 
