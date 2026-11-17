@@ -1,0 +1,61 @@
+PROJECT TITLE: Multi-Tenant Production Document and Code Intelligence API (DocuSense AI)
+
+1. PROJECT OVERVIEW
+DocuSense AI is a production-grade, multi-user backend service for Retrieval-Augmented Generation (RAG). Unlike basic single-user RAG scripts, this system is built as a scalable Software-as-a-Service (SaaS) REST API. Multiple users can register, authenticate, upload large documents (PDFs, Markdown, and source code files), and query their private knowledge base with low latency, strict data isolation, and verifiable source citations.
+
+2. CORE OBJECTIVES
+• Build a clean, modular, asynchronous backend API with proper error handling, request validation, and rate limiting.
+• Enforce strict multi-tenant data isolation using JWT authentication so users can only access and query their own uploaded files.
+• Offload heavy file parsing, chunking, and embedding generation to background workers so HTTP endpoints remain fast and non-blocking.
+• Implement hybrid retrieval (combining semantic vector search and full-text keyword search) inside a single production relational database.
+• Reduce LLM API costs and response latency using semantic/exact response caching and token usage tracking.
+• Containerize the entire multi-service architecture for reproducible local development and cloud deployment.
+
+3. RECOMMENDED TECH STACK
+• Programming Language: Python 3.12+
+• Backend Web Framework: FastAPI (with Pydantic v2 for strict request/response schema validation)
+• Primary Database & Vector Store: PostgreSQL 16 with the pgvector extension (using SQLAlchemy or Psycopg3 and Alembic for database migrations)
+• Caching & Message Broker: Redis
+• Background Task Queue: Celery (or ARQ / FastAPI BackgroundTasks for initial prototyping before moving to Celery)
+• AI & Embeddings: OpenAI API or Google Gemini API (using direct SDKs rather than heavy wrapper frameworks so the retrieval logic stays transparent and debuggable)
+• Document Parsing: PyMuPDF (fitz) for PDFs and standard AST/text splitters for code files
+• Security & Auth: JWT (PyJWT / python-jose) with Passlib (bcrypt) for password hashing, plus SlowAPI for Redis-backed rate limiting
+• Testing & Evaluation: PyTest and HTTPX for integration tests, plus a custom evaluation script measuring Recall@K, latency, and token cost
+• Containerization & Deployment: Docker, Docker Compose, GitHub Actions (CI), deployed on AWS EC2, Railway, or Render
+
+4. SYSTEM ARCHITECTURE & WORKFLOWS
+Workflow A: Authentication and User Management
+• POST /api/v1/auth/register: Accepts email and password, hashes the password, and creates a user record in PostgreSQL.
+• POST /api/v1/auth/login: Verifies credentials and returns a signed JWT access token.
+• All protected endpoints require a valid Bearer token in the Authorization header.
+
+Workflow B: Asynchronous Document Ingestion Pipeline
+• POST /api/v1/documents/upload: Accepts a PDF or code file from an authenticated user. Validates file type and size, saves metadata in PostgreSQL with status "PENDING", pushes a processing job to Redis, and immediately returns HTTP 202 Accepted with a document_id.
+• Background Worker (Celery): Picks up the job, extracts text with page numbers or line numbers, splits text into overlapping chunks, generates vector embeddings via an embedding model API, stores chunks + embeddings + full-text search vectors in PostgreSQL, and updates document status to "COMPLETED" (or "FAILED" with error logs).
+• GET /api/v1/documents: Lists all documents belonging to the authenticated user along with their processing status.
+• DELETE /api/v1/documents/{document_id}: Deletes the document and cascades deletion to all associated chunks and embeddings.
+
+Workflow C: Hybrid Retrieval and Grounded Chat Pipeline
+• POST /api/v1/chat/query: Accepts a user question and optional document_ids filter.
+• Step 1 (Rate Limit & Cache Check): Checks Redis rate limits for the user. Checks Redis cache for an identical recent query on the same document set; if hit, returns cached response immediately.
+• Step 2 (Hybrid Search): Converts the user question into an embedding. Executes a PostgreSQL query filtering strictly by user_id, combining pgvector cosine similarity search and PostgreSQL tsvector keyword search (via Reciprocal Rank Fusion) to fetch the top 5 most relevant chunks.
+• Step 3 (LLM Generation with Guardrails): Sends the top 5 chunks to the LLM with a strict system prompt instructing it to answer ONLY using the provided context, cite exact document names and page numbers, and reply "Insufficient information in uploaded documents" if the answer is not present.
+• Step 4 (Logging & Streaming): Streams the response back to the client (Server-Sent Events), logs prompt tokens, completion tokens, and total latency in PostgreSQL, and caches the final result in Redis.
+
+5. DATABASE SCHEMA (POSTGRESQL)
+• users: id (UUID, PK), email (VARCHAR, unique), hashed_password (TEXT), created_at (TIMESTAMP)
+• documents: id (UUID, PK), user_id (UUID, FK -> users.id), filename (VARCHAR), file_type (VARCHAR), status (ENUM: PENDING, PROCESSING, COMPLETED, FAILED), error_message (TEXT), created_at (TIMESTAMP)
+• document_chunks: id (UUID, PK), document_id (UUID, FK -> documents.id), user_id (UUID, FK -> users.id), chunk_index (INT), content (TEXT), metadata (JSONB - page number/file path), embedding (VECTOR(1536)), search_vector (TSVECTOR)
+• query_logs: id (UUID, PK), user_id (UUID, FK -> users.id), query_text (TEXT), response_text (TEXT), latency_ms (INT), tokens_used (INT), cache_hit (BOOLEAN), created_at (TIMESTAMP)
+
+6. IMPLEMENTATION MILESTONES (BUILD IN ORDER)
+• Milestone 1: Setup FastAPI project structure, Docker Compose (PostgreSQL + pgvector + Redis), database models, and JWT authentication endpoints.
+• Milestone 2: Build synchronous file upload, text extraction, chunking, and basic pgvector storage + similarity search.
+• Milestone 3: Refactor ingestion to use Celery + Redis background workers, add hybrid search (vector + keyword), and add LLM answer generation with source citations.
+• Milestone 4: Add Redis response caching, rate limiting, streaming responses, PyTest automated tests, and deploy via Docker.
+
+7. RULES FOR AI PAIR-PROGRAMMING (ANTIGRAVITY INSTRUCTIONS)
+• Build one milestone at a time. Do not generate the entire codebase at once.
+• Explain the architectural reason behind every file, database index, and library choice before writing code.
+• Use clean, modular folder structure (api/routes, core/config, db/models, services/ingestion, services/retrieval, workers/tasks).
+• Never use high-level black-box chains where raw Python and SQL are clearer and easier to debug.
