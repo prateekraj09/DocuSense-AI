@@ -7,6 +7,7 @@ from fastapi import (
     Depends,
     File,
     HTTPException,
+    Request,
     UploadFile,
     status,
 )
@@ -15,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_current_user
 from core.database import get_db
+from core.rate_limiter import limiter
 from db.models import Document, DocumentChunk, DocumentStatus, User
 from schemas.document import (
     DocumentListResponse,
@@ -23,6 +25,7 @@ from schemas.document import (
     SimilaritySearchRequest,
     SimilaritySearchResponse,
 )
+from services.cache import cache_service
 from services.ingestion import process_document_sync
 from services.parsers import ALLOWED_EXTENSIONS
 from services.retrieval import retrieval_service
@@ -37,7 +40,9 @@ router = APIRouter(prefix="/documents", tags=["Documents"])
     summary="Upload and ingest a document asynchronously",
     description="Validates file, creates PENDING document record, enqueues processing job to Celery/Redis, and returns HTTP 202.",
 )
+@limiter.limit("30/minute")
 async def upload_document(
+    request: Request,
     file: Annotated[UploadFile, File(...)],
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -45,6 +50,9 @@ async def upload_document(
 ) -> DocumentResponse:
     import base64
     from workers.tasks import ingest_document_task
+
+    # Invalidate stale query caches when a new document is uploaded
+    cache_service.invalidate_user_cache(current_user.id)
 
     filename = file.filename or "uploaded_file.txt"
     file_bytes = await file.read()

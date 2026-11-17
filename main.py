@@ -3,10 +3,12 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi.errors import RateLimitExceeded
 
 from api.v1.router import api_router
 from core.config import settings
 from core.database import async_engine, init_db
+from core.rate_limiter import limiter, rate_limit_exceeded_handler
 
 
 @asynccontextmanager
@@ -33,6 +35,10 @@ app = FastAPI(
     redoc_url="/redoc",
     lifespan=lifespan,
 )
+
+# Attach rate limiter to app state and register custom 429 handler
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 # Set up CORS middleware for frontend / client access
 app.add_middleware(

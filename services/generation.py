@@ -166,5 +166,54 @@ class GroundedGenerationService:
             latency_ms = int((time.time() - start_time) * 1000)
             raise RuntimeError(f"LLM Generation Error: {str(e)}") from e
 
+    def generate_grounded_answer_stream(
+        self,
+        query: str,
+        retrieved_chunks: List[SearchResult],
+    ):
+        """Streams generated tokens and citations incrementally for Server-Sent Events (SSE)."""
+        if not retrieved_chunks:
+            yield {"type": "token", "content": "Insufficient information in uploaded documents to answer this question."}
+            yield {"type": "citations", "citations": []}
+            yield {"type": "done"}
+            return
+
+        context_str = self._format_context_chunks(retrieved_chunks)
+        user_prompt = (
+            f"CONTEXT DOCUMENTS:\n{context_str}\n\n"
+            f"USER QUESTION: {query}\n\n"
+            f"Remember: Answer ONLY from the context above. Cite every fact as [filename, Page X] or [filename, Lines Y-Z]. "
+            f"If not in the context, reply 'Insufficient information in uploaded documents to answer this question.'"
+        )
+
+        try:
+            config = types.GenerateContentConfig(
+                system_instruction=STRICT_GUARDRAIL_SYSTEM_INSTRUCTION,
+                temperature=0.0,
+            )
+            accumulated_text = ""
+            for response_chunk in self.client.models.generate_content_stream(
+                model=self.model,
+                contents=user_prompt,
+                config=config,
+            ):
+                if response_chunk.text:
+                    accumulated_text += response_chunk.text
+                    yield {"type": "token", "content": response_chunk.text}
+
+            citations = self._extract_citations(accumulated_text, retrieved_chunks)
+            yield {
+                "type": "citations",
+                "citations": [
+                    {"source": c.source, "location": c.location, "snippet": c.snippet}
+                    for c in citations
+                ],
+            }
+            yield {"type": "done", "full_answer": accumulated_text}
+
+        except Exception as e:
+            logger.error(f"Streaming generation error: {e}")
+            yield {"type": "error", "message": str(e)}
+
 
 generation_service = GroundedGenerationService()
