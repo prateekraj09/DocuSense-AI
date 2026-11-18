@@ -45,6 +45,7 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-docusense_ai}
       - REDIS_URL=redis://redis:6379/0
+      - C_FORCE_ROOT=true
     depends_on:
       postgres:
         condition: service_healthy
@@ -65,6 +66,7 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-docusense_ai}
       - REDIS_URL=redis://redis:6379/0
+      - C_FORCE_ROOT=true
     depends_on:
       postgres:
         condition: service_healthy
