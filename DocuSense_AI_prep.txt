@@ -1,7 +1,7 @@
 ================================================================================
                     DOCUSENSE AI - INTERVIEW PREPARATION GUIDE
 ================================================================================
-Author: Prateek (Guided by Principal Software Engineer)
+Author: Prateek 
 Project: DocuSense AI (Multi-Tenant Production Document & Code Intelligence API)
 Target Role: AI Software Engineer / Backend Systems Engineer (Production RAG)
 Perspective: "Teaching the Interviewer From First Principles"
