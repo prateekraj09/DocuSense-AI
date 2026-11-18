@@ -221,6 +221,18 @@ verifiable document and code intelligence:
 - Repeated queries (e.g. team members querying the same company handbook) return in < 1ms
   instead of 2000ms, and cost $0 in LLM API tokens.
 
+[Production Engineering Hard Lessons]:
+- PostgreSQL Null Byte (0x00) Sanitization: Mathematical and scientific PDFs frequently extract
+  with raw null characters (`\x00`). PostgreSQL `VARCHAR` and `TEXT` are null-terminated C strings
+  and strictly reject null bytes (`invalid byte sequence for encoding UTF8: 0x00`). We sanitize
+  all text via `.replace('\x00', '')` across all parser and chunker layers.
+- ORM Custom Extension Operators: Mapping `pgvector` requires native `Vector(768)` mapped columns
+  so SQLAlchemy exposes `.cosine_distance()` and `<=>` operators. Generic column variants strip
+  specialized operators.
+- Distributed Redis JSON Serialization: Pydantic v2 `model_dump()` preserves native UUID objects.
+  Redis caching requires `model_dump(mode='json')` or `json.dumps(..., default=str)` to prevent
+  `TypeError: Object of type UUID is not JSON serializable`.
+
 ================================================================================
 5. MASTER INTERVIEW QUIZ REVISION (MODEL ANSWERS FOR ALL MILESTONES)
 ================================================================================
