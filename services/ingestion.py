@@ -62,16 +62,18 @@ async def process_document_sync(
         db_chunks = []
         for i, chunk in enumerate(text_chunks):
             embedding_val = embeddings[i] if i < len(embeddings) else None
+            # Sanitize null bytes (0x00) to protect PostgreSQL UTF-8 column storage
+            clean_content = chunk.content.replace("\x00", "")
 
             db_chunk = DocumentChunk(
                 id=uuid.uuid4(),
                 document_id=doc.id,
                 user_id=user_id,
                 chunk_index=chunk.chunk_index,
-                content=chunk.content,
+                content=clean_content,
                 chunk_metadata=chunk.metadata,
                 embedding=embedding_val,
-                search_vector=func.to_tsvector("english", chunk.content) if is_postgresql else None,
+                search_vector=func.to_tsvector("english", clean_content) if is_postgresql else None,
             )
             db_chunks.append(db_chunk)
 

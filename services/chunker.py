@@ -25,7 +25,7 @@ class DocumentChunker:
         global_index = 0
 
         for block in blocks:
-            text = block.text.strip()
+            text = block.text.replace("\x00", "").strip()
             if not text:
                 continue
 

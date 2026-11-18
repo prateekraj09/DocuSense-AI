@@ -152,9 +152,9 @@ class DocumentChunk(Base):
         JSON().with_variant(JSONB, "postgresql"),
         nullable=True,
     )
-    # 768 dimensions for Gemini text-embedding-004; in PostgreSQL it compiles to vector(768)
+    # 768 dimensions for Gemini embeddings; compiles to vector(768) in PostgreSQL
     embedding = mapped_column(
-        JSON().with_variant(Vector(settings.EMBEDDING_DIMENSION), "postgresql"),
+        Vector(settings.EMBEDDING_DIMENSION),
         nullable=True,
     )
     # PostgreSQL full text search vector for hybrid search; in PostgreSQL it compiles to tsvector

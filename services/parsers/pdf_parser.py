@@ -19,6 +19,8 @@ class PDFParser:
         for page_num in range(total_pages):
             page = doc.load_page(page_num)
             text = page.get_text("text").strip()
+            # Strip null bytes 0x00 which occur in some scientific PDFs and corrupt PostgreSQL UTF-8
+            text = text.replace("\x00", "")
             if text:
                 blocks.append(
                     ExtractedBlock(

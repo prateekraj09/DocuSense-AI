@@ -19,6 +19,9 @@ class CodeAndTextParser:
             # Fallback decoding for legacy encoded files
             text = content_bytes.decode("latin-1", errors="replace")
 
+        # Strip null bytes 0x00
+        text = text.replace("\x00", "")
+
         lines = text.splitlines()
         if not lines:
             return []

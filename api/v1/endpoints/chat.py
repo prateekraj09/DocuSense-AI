@@ -129,8 +129,8 @@ async def query_chat(
     response_data = {
         "query": query_in.query,
         "answer": answer,
-        "citations": [c.model_dump() for c in citations],
-        "retrieved_chunks": [ci.model_dump() for ci in chunk_infos],
+        "citations": [c.model_dump(mode="json") for c in citations],
+        "retrieved_chunks": [ci.model_dump(mode="json") for ci in chunk_infos],
         "latency_ms": latency_ms,
         "tokens_used": tokens_used,
         "cache_hit": False,

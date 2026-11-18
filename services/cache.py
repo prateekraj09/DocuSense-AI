@@ -74,7 +74,7 @@ class RedisCacheService:
         if not client:
             return
         try:
-            client.setex(cache_key, expire_seconds, json.dumps(data))
+            client.set(cache_key, json.dumps(data, default=str), ex=expire_seconds)
         except Exception as e:
             logger.warning(f"Redis cache write error: {e}")
 

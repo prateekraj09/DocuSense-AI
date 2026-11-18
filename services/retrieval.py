@@ -53,7 +53,10 @@ class HybridRetrievalService:
     ) -> List[DocumentChunk]:
         """Retrieves top candidates ranked purely by dense vector cosine similarity."""
         if is_postgresql:
-            distance_expr = DocumentChunk.embedding.cosine_distance(query_embedding).label("distance")
+            if hasattr(DocumentChunk.embedding, "cosine_distance"):
+                distance_expr = DocumentChunk.embedding.cosine_distance(query_embedding).label("distance")
+            else:
+                distance_expr = DocumentChunk.embedding.op("<=>")(query_embedding).label("distance")
             stmt = select(DocumentChunk).where(DocumentChunk.user_id == user_id)
             if document_ids:
                 stmt = stmt.where(DocumentChunk.document_id.in_(document_ids))
