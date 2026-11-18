@@ -10,7 +10,10 @@ from tests.test_documents import create_sample_pdf_bytes
 
 
 @pytest.mark.asyncio
-async def test_async_upload_returns_202_pending(async_client: AsyncClient):
+async def test_async_upload_returns_202_pending(async_client: AsyncClient, monkeypatch):
+    from workers import tasks
+    monkeypatch.setattr(tasks.ingest_document_task, "delay", lambda **kwargs: None)
+
     # Register & Login
     user_data = {"email": "async_user@docusense.ai", "password": "AsyncPassword123!"}
     await async_client.post("/api/v1/auth/register", json=user_data)

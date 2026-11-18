@@ -186,7 +186,6 @@ Run `python scripts/evaluate_retrieval.py` to benchmark retrieval accuracy and l
 
 ---
 
-## Interview Preparation Guide
+## Credits
+Made by Prateek Raj.
 
-For in-depth revision covering architectural trade-offs, system design diagrams, first-principles concept definitions (Embeddings, Cosine Distance, TSVECTOR, RRF, JWT, Bcrypt, Celery/Redis), and interview Q&As, consult:
-📄 **[DocuSense_AI_prep.txt](DocuSense_AI_prep.txt)**

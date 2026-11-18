@@ -14,6 +14,7 @@ TABLE OF CONTENTS
 4. COMPONENT DEEP DIVES & HOW EVERYTHING WAS IMPLEMENTED
 5. ARCHITECTURAL DESIGN TRADE-OFFS ("WHY THIS OVER THAT?")
 6. MASTER INTERVIEW QUIZ REVISION (MILESTONES 1, 2, 3, & 4 MODEL ANSWERS)
+7. CONTAINERIZATION, CLOUD DEPLOYMENT & PRODUCTION RESUME LINK GUIDE
 
 ================================================================================
 1. EXECUTIVE SUMMARY: WHAT PROBLEM ARE WE SOLVING & HOW?
@@ -287,3 +288,68 @@ A3: "Recall@K measures the proportion of test queries where the ground-truth rel
      successfully retrieved within the top K results. In RAG, if the correct chunk is not in
      the top K, the LLM has zero chance of answering accurately, making Recall@K the most
      critical determinant of downstream RAG accuracy."
+
+================================================================================
+7. CONTAINERIZATION, CLOUD DEPLOYMENT & PRODUCTION RESUME LINK GUIDE
+================================================================================
+
+[Core Concept: Localhost vs. Cloud Deployment vs. Containerization]:
+1. What is `localhost` (127.0.0.1)?:
+   `localhost` is a loopback network address that points strictly to your own physical machine.
+   If you put `http://localhost:8000/ui` on a resume or portfolio, an external recruiter or
+   interviewer clicking the link will see "This site can't be reached", because their browser
+   will try to query port 8000 on THEIR laptop, where DocuSense AI is not running!
+2. Why don't visitors run your code on their machines?:
+   Hiring managers and interviewers review 50+ resumes daily and spend 30-60 seconds per resume.
+   They will NEVER clone a GitHub repo, install Python, set up virtual environments, download
+   Docker, compile pgvector C extensions, configure Redis, and set up API keys. They demand
+   a 1-click clickable web link (`https://...`) that opens instantly on desktop or mobile.
+3. What is Containerization (Docker)?:
+   Containerization packages the application code, runtime (Python 3.12), system C-libraries
+   (`libpq-dev`, `build-essential`), third-party services (PostgreSQL 16 + pgvector, Redis 7),
+   and configuration into an immutable, standalone Linux container.
+   It completely solves the "It works on my machine!" problem: if the container runs in local
+   Docker, it is mathematically guaranteed to run identically in AWS, GCP, or Render without
+   dependency version mismatch.
+4. What is Cloud Deployment?:
+   Cloud deployment is running the containerized application on managed 24/7 internet-facing
+   servers equipped with public IP addresses, automatic SSL/TLS encryption (`https://`),
+   managed databases, and DNS routing.
+
+[Docker Compose Multi-Container Orchestration Architecture]:
+In `docker-compose.yml`, DocuSense AI coordinates four isolated services over an internal bridge network:
+1. `postgres` (Container: `docusense_postgres`):
+   - Image: `pgvector/pgvector:pg16`
+   - Volume: `postgres_data` (persists relational data and vector indexes across restarts).
+   - Healthcheck: `pg_isready` verifies the database is accepting queries before starting dependencies.
+2. `redis` (Container: `docusense_redis`):
+   - Image: `redis:7-alpine`
+   - Volume: `redis_data` (persists cache state and in-flight Celery task queues).
+   - Healthcheck: `redis-cli ping` ensures memory broker readiness.
+3. `api` (Container: `docusense_api`):
+   - Multi-stage Dockerfile based on `python:3.12-slim`.
+   - Runs FastAPI with Uvicorn on port 8000.
+   - Depends on `postgres` and `redis` being healthy.
+4. `worker` (Container: `docusense_worker`):
+   - Runs Celery worker process (`celery -A workers.celery_app.celery_app worker`).
+   - Consumes ingestion jobs from Redis and writes chunks directly to PostgreSQL.
+
+[Zero-Cost Cloud Production Deployment Strategy (100% Free Forever)]:
+To get a public HTTPS resume link without paying a dime:
+1. Compute & Web API: Render.com (Free Web Service)
+   - Connects to GitHub repository with automatic redeployment on git push.
+   - Free custom subdomain: `https://docusense-ai.onrender.com/ui`.
+2. Vector Database: Neon.tech or Supabase (Free PostgreSQL with pgvector)
+   - Free 500MB storage, fully managed, persistent, supports `VECTOR(768)` & `TSVECTOR`.
+3. Cache & Message Broker: Upstash.com (Free Serverless Redis)
+   - Free 10,000 requests/day, SSL-encrypted (`rediss://`), zero maintenance.
+
+[How to Present DocuSense AI on Your Resume]:
+Project Entry:
+"DocuSense AI | Production Multi-Tenant RAG & Code Intelligence Platform"
+- Built a production-grade RAG backend in FastAPI & PostgreSQL 16 (pgvector), achieving 100% Recall@5.
+- Designed single-store hybrid search merging cosine vector similarity with TSVECTOR full-text search using Reciprocal Rank Fusion (RRF, k=60).
+- Implemented async document ingestion via Celery & Redis, decoupling parsing/embedding from HTTP threads (202 Accepted).
+- Slashed repeated query latency from 850ms to 0.8ms using Redis query-hash caching and SlowAPI rate limiting.
+- Containerized with Docker Compose (FastAPI, Celery, PostgreSQL+pgvector, Redis) and deployed to production cloud.
+- Live Demo: https://<your-app>.onrender.com/ui | GitHub: https://github.com/<your-username>/DocuSense-AI

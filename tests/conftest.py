@@ -6,6 +6,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from core.database import get_db
 from db.base import Base
 from main import app
+from workers.celery_app import celery_app
+
+# Set Celery to execute tasks locally and eagerly in tests without requiring Redis
+celery_app.conf.update(
+    task_always_eager=True,
+    task_eager_propagates=True,
+)
 
 # In-memory SQLite async engine for automated integration tests
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
