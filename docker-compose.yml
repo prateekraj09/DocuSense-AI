@@ -38,6 +38,9 @@ services:
       dockerfile: Dockerfile
     container_name: docusense_api
     restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     ports:
       - "8000:8000"
     env_file:
@@ -61,6 +64,9 @@ services:
       dockerfile: Dockerfile
     container_name: docusense_worker
     restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     env_file:
       - .env
     environment:

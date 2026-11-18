@@ -506,7 +506,7 @@
             "Content-Type": "application/json",
             "Authorization": `Bearer ${authToken}`
           },
-          body: JSON.stringify({ query, top_k: 5 })
+          body: JSON.stringify({ query, top_k: 8 })
         });
 
         if (!res.ok) {
@@ -547,7 +547,7 @@
             "Content-Type": "application/json",
             "Authorization": `Bearer ${authToken}`
           },
-          body: JSON.stringify({ query, top_k: 5 })
+          body: JSON.stringify({ query, top_k: 8 })
         });
 
         if (!response.ok) {

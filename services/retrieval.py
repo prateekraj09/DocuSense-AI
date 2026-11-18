@@ -153,12 +153,14 @@ class HybridRetrievalService:
         # 1. Generate dense vector embedding for query
         query_embedding = embedding_service.generate_embedding(query)
 
+        candidate_limit = max(top_k * 5, 30)
+
         # 2. Fetch top candidates from both retrieval channels
         vector_candidates = await cls.search_vector_candidates(
             db=db,
             user_id=user_id,
             query_embedding=query_embedding,
-            candidate_k=top_k * 3,
+            candidate_k=candidate_limit,
             document_ids=document_ids,
             is_postgresql=is_postgresql,
         )
@@ -167,7 +169,7 @@ class HybridRetrievalService:
             db=db,
             user_id=user_id,
             query=query,
-            candidate_k=top_k * 3,
+            candidate_k=candidate_limit,
             document_ids=document_ids,
             is_postgresql=is_postgresql,
         )
