@@ -100,7 +100,7 @@ flowchart TD
 ### 2. Clone and Configure Environment
 ```bash
 # Clone the repository
-git clone https://github.com/prateek/DocuSense-AI.git
+git clone https://github.com/prateekraj09/DocuSense-AI.git
 cd "DocuSense AI"
 
 # Copy environment configuration
@@ -186,6 +186,7 @@ Run `python scripts/evaluate_retrieval.py` to benchmark retrieval accuracy and l
 
 ---
 
-## Credits
-Made by Prateek Raj.
+## Credits & Interview Preparation Guide
+- **Author:** Prateek Raj
+- **Interview Preparation Guide:** See [DocuSense_AI_prep.txt](DocuSense_AI_prep.txt) for comprehensive first-principles concept definitions (Embeddings, Cosine Distance, TSVECTOR, RRF, JWT, Bcrypt, Celery, Redis), system design trade-offs, and master model answers.
 
